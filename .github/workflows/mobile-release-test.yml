@@ -1,10 +1,133 @@
-name: Mobile signed release
+name: Mobile build and release test
 
 on:
   workflow_dispatch:
+    inputs:
+      platform:
+        description: Build platform
+        type: choice
+        options: [both, android, ios]
+        default: both
+      signed_release:
+        description: 'Build signed APK/AAB/IPA (requires signing Secrets)'
+        type: boolean
+        default: false
+      build_number:
+        description: 'Signed release build number (positive integer; increase for each release)'
+        type: string
+        default: '1'
+      ios_method:
+        description: iOS distribution profile type
+        type: choice
+        options: [app-store-connect, release-testing]
+        default: app-store-connect
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-release-test-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  VITE_CONVERSION_SERVER: ${{ vars.VITE_CONVERSION_SERVER }}
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
+  android:
+    if: inputs.platform == 'both' || inputs.platform == 'android'
+    runs-on: ubuntu-24.04
+    environment: mobile-release
+    timeout-minutes: 45
     steps:
-      - run: echo "mobile workflow works"
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install Android SDK packages
+        run: sdkmanager 'platforms;android-36' 'build-tools;35.0.0'
+      - run: npm ci
+      - run: npm test
+      - name: Build web assets and sync Android
+        run: |
+          npm run build
+          npx cap sync android
+      - name: Build debug APK
+        if: ${{ !inputs.signed_release }}
+        run: |
+          bash android/gradlew -p android :app:assembleDebug --no-daemon
+          mkdir -p artifacts
+          cp android/app/build/outputs/apk/debug/app-debug.apk artifacts/folio-android-debug.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose artifacts/folio-android-debug.apk
+      - name: Build signed release APK and AAB
+        if: inputs.signed_release
+        run: python3 scripts/ci/mobile-release.py android
+        env:
+          BUILD_NUMBER: ${{ inputs.build_number }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: folio-android-${{ inputs.signed_release && 'release' || 'debug' }}-${{ github.run_number }}
+          path: |
+            artifacts/*.apk
+            artifacts/*.aab
+          if-no-files-found: error
+          retention-days: 14
+
+  ios:
+    if: inputs.platform == 'both' || inputs.platform == 'ios'
+    runs-on: macos-26
+    environment: mobile-release
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Check Xcode version
+        run: |
+          xcodebuild -version
+          python3 -c 'import subprocess; v=subprocess.check_output(["xcodebuild","-version"], text=True).split()[1]; assert int(v.split(".")[0]) >= 26, "Xcode 26+ required"'
+      - run: npm ci
+      - run: npm test
+      - name: Build web assets and sync iOS
+        run: |
+          npm run build
+          npx cap sync ios
+      - name: Build iOS Simulator app without signing
+        if: ${{ !inputs.signed_release }}
+        run: |
+          xcodebuild -project ios/App/App.xcodeproj -scheme App \
+            -configuration Debug -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/folio-derived-data" \
+            CODE_SIGNING_ALLOWED=NO build
+          mkdir -p artifacts
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$RUNNER_TEMP/folio-derived-data/Build/Products/Debug-iphonesimulator/App.app" \
+            artifacts/folio-ios-simulator.zip
+      - name: Archive and export signed IPA
+        if: inputs.signed_release
+        run: python3 scripts/ci/mobile-release.py ios
+        env:
+          BUILD_NUMBER: ${{ inputs.build_number }}
+          IOS_CERTIFICATE_BASE64: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_PROFILE_BASE64: ${{ secrets.IOS_PROFILE_BASE64 }}
+          IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+          IOS_EXPORT_METHOD: ${{ inputs.ios_method }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: folio-ios-${{ inputs.signed_release && 'release' || 'simulator' }}-${{ github.run_number }}
+          path: |
+            artifacts/*.ipa
+            artifacts/folio-ios-simulator.zip
+          if-no-files-found: error
+          retention-days: 14
