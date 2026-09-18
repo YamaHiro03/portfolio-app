@@ -1,6 +1,6 @@
 name: Mobile build and release test
 
-on:
+"on":
   workflow_dispatch:
     inputs:
       platform:
