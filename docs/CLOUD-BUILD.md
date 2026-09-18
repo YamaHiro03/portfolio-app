@@ -1,13 +1,15 @@
 # クラウドでのビルドと署名
 
-GitHub Actions の `.github/workflows/mobile-release.yml` を追加しています。Android は Linux、iOS は macOS 26 / Xcode 26以上のクラウドランナーを使用します。Dockerfile は変換サーバー用で、iOS のビルドには使いません。
+GitHub Actions の `.github/workflows/mobile-release-test.yml` を追加しています。Android は Linux、iOS は macOS 26 / Xcode 26以上のクラウドランナーを使用します。Dockerfile は変換サーバー用で、iOS のビルドには使いません。
 
 ## 初回設定
 
 1. このプロジェクトを `.github/`、`android/`、`ios/`、`package-lock.json` を含めて GitHub リポジトリへ登録します。`.runtime` や `node_modules` は不要です。
 2. Settings → Environments で `mobile-release` を作成し、下記の Secrets を登録します。署名の実行を制限したい場合は環境のブランチ制限・承認ルールを設定できます。
 3. 変換サーバーを初期設定したい場合は同環境の Variables に `VITE_CONVERSION_SERVER` を HTTPS URL で登録します。空ならアプリ内で後から設定できます。
-4. Actions → **Mobile signed release** → **Run workflow** でプラットフォーム、ビルド番号、iOS配布方式を選びます。ワークフローはデフォルトブランチに登録してください。
+4. Actions → **Mobile build and release test** → **Run workflow** でプラットフォーム、ビルド番号、iOS配布方式を選びます。ワークフローはデフォルトブランチに登録してください。
+   - `signed_release` がオフ（初期値）なら署名SecretsなしでAndroidデバッグAPKとiOSシミュレータ用アプリを生成します。iOSシミュレータ用ZIPはiPhone実機にはインストールできません。
+   - 署名済みAPK・AAB・IPAが必要な場合は `signed_release` をオンにして、下記Secretsを登録してください。
 5. 完了後、実行画面の Artifacts から成果物をダウンロードします。ストアへの自動アップロード・公開は行いません。
 
 ビルド番号は毎回増やす正の整数（最大9桁）です。再実行時も配布済み番号を使い回さず、新しい番号で起動してください。表示バージョンは `package.json` の `version`（`1.0.0` 形式）を使います。
@@ -63,3 +65,7 @@ python3 scripts/ci/mobile-release.py ios
 署名情報がない場合は処理を停止し、未署名のファイルを配布成果物として出力しません。クラウドの実行時間・料金は利用するCIサービスの契約に従います。
 
 公式参考: [GitHubのApple証明書設定](https://docs.github.com/en/actions/how-tos/deploy/deploy-to-third-party-platforms/sign-xcode-applications)、[macOSランナーのXcode構成](https://github.com/actions/runner-images/blob/main/images/macos/macos-26-Readme.md)。
+
+## push時の自動テストビルド
+
+`mobile-release-test.yml` は全ブランチへのpushでAndroidデバッグAPKとiOSシミュレータ用アプリをビルドします。署名付き配布ビルドは引き続きRun workflowから `signed_release` をオンにした場合のみ実行します。`mobile-release` 環境に承認ルールがある場合は、自動ビルドも承認待ちになります。

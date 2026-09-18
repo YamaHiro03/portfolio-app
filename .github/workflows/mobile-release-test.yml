@@ -1,6 +1,8 @@
 name: Mobile build and release test
 
 "on":
+  push:
+    branches: ["**"]
   workflow_dispatch:
     inputs:
       platform:
@@ -34,7 +36,7 @@ env:
 
 jobs:
   android:
-    if: inputs.platform == 'both' || inputs.platform == 'android'
+    if: github.event_name == 'push' || inputs.platform == 'both' || inputs.platform == 'android'
     runs-on: ubuntu-24.04
     environment: mobile-release
     timeout-minutes: 45
@@ -57,14 +59,14 @@ jobs:
           npm run build
           npx cap sync android
       - name: Build debug APK
-        if: ${{ !inputs.signed_release }}
+        if: ${{ github.event_name == 'push' || !inputs.signed_release }}
         run: |
           bash android/gradlew -p android :app:assembleDebug --no-daemon
           mkdir -p artifacts
           cp android/app/build/outputs/apk/debug/app-debug.apk artifacts/folio-android-debug.apk
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose artifacts/folio-android-debug.apk
       - name: Build signed release APK and AAB
-        if: inputs.signed_release
+        if: github.event_name == 'workflow_dispatch' && inputs.signed_release
         run: python3 scripts/ci/mobile-release.py android
         env:
           BUILD_NUMBER: ${{ inputs.build_number }}
@@ -82,7 +84,7 @@ jobs:
           retention-days: 14
 
   ios:
-    if: inputs.platform == 'both' || inputs.platform == 'ios'
+    if: github.event_name == 'push' || inputs.platform == 'both' || inputs.platform == 'ios'
     runs-on: macos-26
     environment: mobile-release
     timeout-minutes: 60
@@ -103,7 +105,7 @@ jobs:
           npm run build
           npx cap sync ios
       - name: Build iOS Simulator app without signing
-        if: ${{ !inputs.signed_release }}
+        if: ${{ github.event_name == 'push' || !inputs.signed_release }}
         run: |
           xcodebuild -project ios/App/App.xcodeproj -scheme App \
             -configuration Debug -destination 'generic/platform=iOS Simulator' \
@@ -114,7 +116,7 @@ jobs:
             "$RUNNER_TEMP/folio-derived-data/Build/Products/Debug-iphonesimulator/App.app" \
             artifacts/folio-ios-simulator.zip
       - name: Archive and export signed IPA
-        if: inputs.signed_release
+        if: github.event_name == 'workflow_dispatch' && inputs.signed_release
         run: python3 scripts/ci/mobile-release.py ios
         env:
           BUILD_NUMBER: ${{ inputs.build_number }}
