@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">folio</string>
+    <string name="title_activity_main">folio</string>
+    <string name="package_name">app.folio.student</string>
+    <string name="custom_url_scheme">app.folio.student</string>
+</resources>

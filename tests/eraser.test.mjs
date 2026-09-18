@@ -1,0 +1,4 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';import {eraseStrokes} from '../annotations.js';
+const stroke={id:'s',width:.01,points:[{x:.1,y:.5},{x:.9,y:.5}]};
+test('swept eraser catches intersections between pointer samples without touching other strokes',()=>{const other={...stroke,id:'other',points:[{x:.1,y:.9},{x:.9,y:.9}]};assert.deepEqual(eraseStrokes([stroke,other],{x:.5,y:.1},{x:.5,y:.8},.02,1.414),[other]);assert.equal(stroke.points.length,2)});
+test('eraser respects aspect ratio, stroke thickness, single dots and near misses',()=>{const dot={id:'dot',width:.02,points:[{x:.5,y:.5}]};assert.equal(eraseStrokes([dot],{x:.5,y:.515},{x:.5,y:.515},.01,2).length,1);assert.equal(eraseStrokes([dot],{x:.5,y:.505},{x:.5,y:.505},.01,2).length,0);assert.equal(eraseStrokes([stroke],{x:0,y:.1},{x:0,y:.9},.01,2).length,1)});

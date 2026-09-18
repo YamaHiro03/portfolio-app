@@ -1,0 +1,12 @@
+export function normalizedPoint(event,rect){return {x:Math.max(0,Math.min(1,(event.clientX-rect.left)/rect.width)),y:Math.max(0,Math.min(1,(event.clientY-rect.top)/rect.height))}}
+export function strokeAppearance(stroke,memorizeMode){return {color:stroke.memorize&&memorizeMode?'#000000':stroke.color,opacity:stroke.memorize?(memorizeMode?1:stroke.opacity):1}}
+export function drawStrokes(canvas,strokes,memorizeMode){const ctx=canvas.getContext('2d');ctx.clearRect(0,0,canvas.width,canvas.height);for(const s of [...strokes.filter(s=>!s.memorize),...strokes.filter(s=>s.memorize)]){if(!s.points.length)continue;const style=strokeAppearance(s,memorizeMode);ctx.strokeStyle=ctx.fillStyle=style.color;ctx.globalAlpha=style.opacity;ctx.lineWidth=s.width*canvas.width;ctx.lineCap=ctx.lineJoin='round';ctx.beginPath();if(s.points.length===1){ctx.arc(s.points[0].x*canvas.width,s.points[0].y*canvas.height,ctx.lineWidth/2,0,2*Math.PI);ctx.fill()}else{s.points.forEach((p,i)=>ctx[i?'lineTo':'moveTo'](p.x*canvas.width,p.y*canvas.height));ctx.stroke()}}ctx.globalAlpha=1}
+export function changeHistory(history,action){if(action.type==='reset')return {past:[],present:action.value,future:[]};if(action.type==='undo')return history.past.length?{past:history.past.slice(0,-1),present:history.past.at(-1),future:[history.present,...history.future]}:history;if(action.type==='redo')return history.future.length?{past:[...history.past,history.present],present:history.future[0],future:history.future.slice(1)}:history;return {past:[...history.past,history.present],present:action.value,future:[]}}
+// Hit-test the swept eraser path in page-width units, preserving the page aspect ratio.
+export function eraseStrokes(strokes,from,to,radius,aspect=1){
+ const scaled=p=>({x:p.x,y:p.y*aspect}),a=scaled(from),b=scaled(to);
+ const pointDistance=(p,u,v)=>{const dx=v.x-u.x,dy=v.y-u.y,t=Math.max(0,Math.min(1,((p.x-u.x)*dx+(p.y-u.y)*dy)/(dx*dx+dy*dy||1)));return Math.hypot(p.x-u.x-t*dx,p.y-u.y-t*dy)};
+ const cross=(p,q,r)=>(q.x-p.x)*(r.y-p.y)-(q.y-p.y)*(r.x-p.x);
+ const distance=(c,d)=>{if(cross(a,b,c)*cross(a,b,d)<0&&cross(c,d,a)*cross(c,d,b)<0)return 0;return Math.min(pointDistance(a,c,d),pointDistance(b,c,d),pointDistance(c,a,b),pointDistance(d,a,b))};
+ return strokes.filter(s=>{const points=s.points.map(scaled),limit=radius+s.width/2;return !points.some((p,i)=>distance(p,points[Math.max(0,i-1)])<=limit)});
+}

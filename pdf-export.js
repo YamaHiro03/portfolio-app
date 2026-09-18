@@ -1,0 +1,8 @@
+import {PDFDocument,degrees} from 'pdf-lib';import {getDocument} from 'pdfjs-dist/legacy/build/pdf.mjs';
+import {drawStrokes} from './annotations';
+// Keep original PDF content; embed only the transparent annotation canvas.
+export async function bakeAnnotations(blob,pdf,pages){const result=await PDFDocument.load(await blob.arrayBuffer());for(const [number,strokes] of Object.entries(pages)){if(!strokes.length)continue;const source=await pdf.getPage(Number(number)),viewport=source.getViewport({scale:1});const canvas=document.createElement('canvas');const scale=Math.min(2,4096/Math.max(viewport.width,viewport.height));canvas.width=Math.max(1,Math.round(viewport.width*scale));canvas.height=Math.max(1,Math.round(viewport.height*scale));drawStrokes(canvas,strokes,false);const image=await result.embedPng(canvas.toDataURL('image/png'));const origin=viewport.convertToPdfPoint(0,viewport.height),right=viewport.convertToPdfPoint(viewport.width,viewport.height);const angle=Math.atan2(right[1]-origin[1],right[0]-origin[0])*180/Math.PI;result.getPage(Number(number)-1).drawImage(image,{x:origin[0],y:origin[1],width:viewport.width,height:viewport.height,rotate:degrees(angle)});canvas.width=canvas.height=0}const bytes=await result.save({useObjectStreams:false});
+// Validate the actual exported bytes with the reader, not just the document we built.
+const task=getDocument({data:bytes.slice(),isEvalSupported:false,stopAtErrors:true});
+try{const reopened=await task.promise;if(reopened.numPages!==result.getPageCount())throw Error('書き出したPDFのページ数が一致しません。');for(let i=1;i<=reopened.numPages;i++){const page=await reopened.getPage(i);await page.getOperatorList();page.cleanup()}}finally{await task.destroy()}
+return new Blob([bytes],{type:'application/pdf'})}

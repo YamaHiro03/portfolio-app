@@ -1,0 +1,17 @@
+node_modules/
+dist/
+test-results/
+playwright-report/
+.env
+*.log
+
+.runtime/
+artifacts/
+*.jks
+*.keystore
+*.mobileprovision
+*.p12
+*.p8
+*.pem
+*.key
+*.xcarchive/
