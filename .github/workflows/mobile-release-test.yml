@@ -117,6 +117,9 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent \
             "$RUNNER_TEMP/folio-derived-data/Build/Products/Debug-iphonesimulator/App.app" \
             artifacts/folio-ios-simulator.zip
+      - name: Build unsigned device IPA for AltStore Classic
+        if: ${{ github.event_name == 'push' || !inputs.signed_release }}
+        run: bash scripts/ci/build-ios-unsigned.sh
       - name: Archive and export signed IPA
         if: github.event_name == 'workflow_dispatch' && inputs.signed_release
         run: python3 scripts/ci/mobile-release.py ios
@@ -129,7 +132,7 @@ jobs:
           IOS_EXPORT_METHOD: ${{ inputs.ios_method }}
       - uses: actions/upload-artifact@v4
         with:
-          name: folio-ios-${{ inputs.signed_release && 'release' || 'simulator' }}-${{ github.run_number }}
+          name: folio-ios-${{ inputs.signed_release && 'release' || 'unsigned-and-simulator' }}-${{ github.run_number }}
           path: |
             artifacts/*.ipa
             artifacts/folio-ios-simulator.zip

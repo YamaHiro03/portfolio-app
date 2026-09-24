@@ -69,3 +69,20 @@ python3 scripts/ci/mobile-release.py ios
 ## push時の自動テストビルド
 
 `mobile-release-test.yml` は全ブランチへのpushでAndroidデバッグAPKとiOSシミュレータ用アプリをビルドします。署名付き配布ビルドは引き続きRun workflowから `signed_release` をオンにした場合のみ実行します。`mobile-release` 環境に承認ルールがある場合は、自動ビルドも承認待ちになります。
+
+## AltStore Classicで実機テスト（未署名IPA）
+
+push時と、手動実行で `signed_release` をオフにした時は、iOSシミュレータ用ZIPに加えて **`folio-ios-unsigned.ipa`** を生成します。手動実行は `platform=ios` を選ぶとAndroidビルドを省略できます。Appleの署名Secretsは不要です。
+
+1. GitHub ActionsのiOSジョブが成功したら、Artifactsの `folio-ios-unsigned-and-simulator-<実行番号>` をダウンロードします。
+2. ダウンロードしたArtifactのZIPを展開し、`folio-ios-unsigned.ipa` をiPhoneの「ファイル」に保存します。IPA自体は展開しません。
+3. セットアップ済みのAltStore ClassicでIPAを選択してインストールします。AltStore側で自分のAppleアカウントを使用して再署名します。署名・更新の条件は利用するAltStoreとAppleアカウントに従います。
+4. folioを開き、PDFの読み込み、手書き、保存、終了後の下書き復元を確認してください。
+
+これは実機用 `iphoneos` / arm64 のReleaseビルドで、`Payload/App.app` を格納したIPAです。シミュレータ用ZIPとは別物です。未署名のまま直接インストールしたりApp Storeへ提出したりはできません。
+
+実装: `scripts/ci/build-ios-unsigned.sh`。macOSではWebビルド・`npx cap sync ios` の後に `bash scripts/ci/build-ios-unsigned.sh` で同じIPAを生成できます。実機プラットフォーム、arm64、同梱Web画面、IPAのZIP構造を生成時にチェックします。
+
+この変更のローカル確認は構文・パッケージ処理に限定されます。Xcodeでの実ビルドとAltStore経由のインストールはクラウドと実機で確認してください。
+
+参考: [AltStore Classic公式ガイド](https://faq.altstore.io/altstore-classic/your-altstore)、[AltServer](https://faq.altstore.io/altstore-classic/altserver)。
