@@ -25,7 +25,16 @@ with (app / 'Info.plist').open('rb') as file:
 if info.get('CFBundleSupportedPlatforms') != ['iPhoneOS']:
     raise SystemExit('Expected an iPhoneOS app, not a simulator app')
 executable = app / info['CFBundleExecutable']
-subprocess.run(['lipo', '-verify_arch', 'arm64', str(executable)], check=True)
+if not executable.is_file():
+    raise SystemExit(f'Missing app executable: {executable}')
+# Use the active Xcode toolchain and parse architecture tokens, not substrings.
+# -verify_arch consumes subsequent arguments as architectures, including a trailing path.
+architectures = subprocess.check_output(
+    ['xcrun', 'lipo', '-archs', str(executable)], text=True
+).split()
+if 'arm64' not in architectures:
+    raise SystemExit(f'Expected arm64 device binary; found: {architectures}')
+print(f'Validated iPhoneOS executable architectures: {" ".join(architectures)}')
 if not (app / 'public' / 'index.html').is_file():
     raise SystemExit('Missing bundled web app; run npm run build and npx cap sync ios first')
 PY
