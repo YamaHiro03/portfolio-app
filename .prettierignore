@@ -1,0 +1,12 @@
+node_modules/
+.runtime/
+artifacts/
+dist/
+android/
+ios/
+test-results/
+playwright-report/
+package-lock.json
+public/
+.agents/
+.codex/

@@ -5,3 +5,14 @@ test-results
 playwright-report
 
 .runtime
+
+artifacts
+.env
+.env.*
+*.p12
+*.pem
+*.key
+*.jks
+*.keystore
+*.mobileprovision
+**/__pycache__

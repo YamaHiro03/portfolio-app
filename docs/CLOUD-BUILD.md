@@ -6,7 +6,7 @@ GitHub Actions の `.github/workflows/mobile-release-test.yml` を追加して�
 
 1. このプロジェクトを `.github/`、`android/`、`ios/`、`package-lock.json` を含めて GitHub リポジトリへ登録します。`.runtime` や `node_modules` は不要です。
 2. Settings → Environments で `mobile-release` を作成し、下記の Secrets を登録します。署名の実行を制限したい場合は環境のブランチ制限・承認ルールを設定できます。
-3. 変換サーバーを初期設定したい場合は同環境の Variables に `VITE_CONVERSION_SERVER` を HTTPS URL で登録します。空ならアプリ内で後から設定できます。
+3. 現在のUIはPDFのみ取り込みます。`VITE_CONVERSION_SERVER` は将来の変換統合向けの予約設定で、現在の画面は使用しません。
 4. Actions → **Mobile build and release test** → **Run workflow** でプラットフォーム、ビルド番号、iOS配布方式を選びます。ワークフローはデフォルトブランチに登録してください。
    - `signed_release` がオフ（初期値）なら署名SecretsなしでAndroidデバッグAPKとiOSシミュレータ用アプリを生成します。iOSシミュレータ用ZIPはiPhone実機にはインストールできません。
    - 署名済みAPK・AAB・IPAが必要な場合は `signed_release` をオンにして、下記Secretsを登録してください。
@@ -16,12 +16,12 @@ GitHub Actions の `.github/workflows/mobile-release-test.yml` を追加して�
 
 ## Android の Secrets
 
-| 名前 | 内容 |
-| --- | --- |
-| `ANDROID_KEYSTORE_BASE64` | リリース用 keystore ファイル全体の Base64 |
-| `ANDROID_KEYSTORE_PASSWORD` | keystore パスワード |
-| `ANDROID_KEY_ALIAS` | 鍵の alias |
-| `ANDROID_KEY_PASSWORD` | 鍵のパスワード |
+| 名前                        | 内容                                      |
+| --------------------------- | ----------------------------------------- |
+| `ANDROID_KEYSTORE_BASE64`   | リリース用 keystore ファイル全体の Base64 |
+| `ANDROID_KEYSTORE_PASSWORD` | keystore パスワード                       |
+| `ANDROID_KEY_ALIAS`         | 鍵の alias                                |
+| `ANDROID_KEY_PASSWORD`      | 鍵のパスワード                            |
 
 初回の鍵は JDK の `keytool` 等で作成し、以後の更新でも同じ鍵を保持してください。Google Play App Signing 利用時はアップロード鍵を指定します。既存のデバッグAPKとは署名が異なるため、そのまま上書きインストールはできません。削除すると端末内資料も消えるため、必要なPDFを先に書き出してください。
 
@@ -29,12 +29,12 @@ GitHub Actions の `.github/workflows/mobile-release-test.yml` を追加して�
 
 ## iOS の Secrets
 
-| 名前 | 内容 |
-| --- | --- |
-| `IOS_CERTIFICATE_BASE64` | 秘密鍵を含む Apple Distribution 証明書 `.p12` の Base64 |
-| `IOS_CERTIFICATE_PASSWORD` | `.p12` のパスワード（空は不可） |
-| `IOS_PROFILE_BASE64` | 配布用 `.mobileprovision` の Base64 |
-| `IOS_TEAM_ID` | Apple Developer の Team ID |
+| 名前                       | 内容                                                    |
+| -------------------------- | ------------------------------------------------------- |
+| `IOS_CERTIFICATE_BASE64`   | 秘密鍵を含む Apple Distribution 証明書 `.p12` の Base64 |
+| `IOS_CERTIFICATE_PASSWORD` | `.p12` のパスワード（空は不可）                         |
+| `IOS_PROFILE_BASE64`       | 配布用 `.mobileprovision` の Base64                     |
+| `IOS_TEAM_ID`              | Apple Developer の Team ID                              |
 
 Apple Developer で `app.folio.student` の明示的な App ID と配布プロファイルを準備してください。Bundle ID を変更する場合は Xcode の設定、`capacitor.config.json` と `scripts/ci/mobile-release.py` の `bundle` も変更します。
 

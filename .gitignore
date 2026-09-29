@@ -15,3 +15,20 @@ artifacts/
 *.pem
 *.key
 *.xcarchive/
+
+# Developer-only state and generated files
+__pycache__/
+*.py[cod]
+.~lock.*#
+~$*
+.env.*
+!.env.example
+.agents/
+.codex/
+*.ipa
+*.apk
+*.aab
+*.cer
+*.pfx
+*.provisionprofile
+.DS_Store
