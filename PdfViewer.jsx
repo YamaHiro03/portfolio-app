@@ -27,7 +27,7 @@ import { bakeAnnotations } from './pdf-export';
 import { normalizedPoint, drawStrokes, changeHistory, eraseStrokes } from './annotations';
 import './pdf.css';
 GlobalWorkerOptions.workerSrc = workerUrl;
-export default function PdfViewer({ doc, entries = [], onClose, onSaved, onDelete }) {
+export default function PdfViewer({ doc, entries = [], onClose, onSaved, onDelete, onAskAi }) {
   const [exportBlob, setExportBlob] = useState(null),
     [exportPreparing, setExportPreparing] = useState(false),
     [saveNotice, setSaveNotice] = useState('');
@@ -449,6 +449,18 @@ export default function PdfViewer({ doc, entries = [], onClose, onSaved, onDelet
         >
           {status}
         </span>
+        {onAskAi && (
+          <button
+            aria-label="このPDFに質問"
+            disabled={!loaded || !!recovery || saving}
+            onClick={async () => {
+              await saveQueue.current.catch(() => {});
+              onAskAi();
+            }}
+          >
+            このPDFに質問
+          </button>
+        )}
         <button
           aria-label="編集を保存"
           disabled={!loaded || !!recovery || saving}

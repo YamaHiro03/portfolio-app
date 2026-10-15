@@ -1,5 +1,23 @@
 import { defineConfig } from 'vite';
 export default defineConfig({
+  plugins: [
+    {
+      name: 'local-ai-access',
+      configureServer(server) {
+        server.middlewares.use((req, res, next) => {
+          if (
+            req.url?.startsWith('/api/ai') &&
+            !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress)
+          ) {
+            res.statusCode = 403;
+            res.end('AI is available on localhost only');
+            return;
+          }
+          next();
+        });
+      },
+    },
+  ],
   build: { target: ['safari16', 'chrome120'] },
   server: {
     host: '0.0.0.0',

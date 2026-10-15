@@ -9,6 +9,7 @@ import { libraryRepository } from './library-repository';
 import { breadcrumbs } from './library-model';
 import PdfThumbnail from './PdfThumbnail';
 import PdfViewer from './PdfViewer';
+import AiAssistant from './features/ai/AiAssistant';
 import React, { useState, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
@@ -128,10 +129,7 @@ function App() {
     }),
     [toast, setToast] = useState(''),
     [grid, setGrid] = useState(true),
-    [prompt, setPrompt] = useState(''),
-    [sources, setSources] = useState([2]),
-    [messages, setMessages] = useState([]),
-    [busy, setBusy] = useState(false),
+    [aiDocumentId, setAiDocumentId] = useState(null),
     [mobile, setMobile] = useState(false),
     [sort, setSort] = useState('new');
   useEffect(() => {
@@ -241,28 +239,6 @@ function App() {
       setUploading(false);
     }
   }
-  function generate() {
-    if (!prompt.trim() || busy) return;
-    if (!sources.length) {
-      setToast('参照する資料を選択してください');
-      return;
-    }
-    const input = prompt;
-    setPrompt('');
-    setBusy(true);
-    setMessages((m) => [...m, { role: 'user', text: input }]);
-    setTimeout(() => {
-      const refs = docs.filter((d) => sources.includes(d.id));
-      setMessages((m) => [
-        ...m,
-        {
-          role: 'ai',
-          text: `デモプレビュー：${input}\n\n参照資料：${refs.map((d) => d.title).join('、')}\n\n${refs.map((d, i) => `問${i + 1}　「${d.title}」の主要な概念を説明し、具体例を1つ挙げてください。\n\n復習のヒント：${d.text || '資料を読み、重要な用語とその関係を整理してください。'}`).join('\n\n')}\n\n※ これはテンプレートによるサンプルです。AIモデルによる資料解析・問題生成には、サーバー側のAPI接続が必要です。`,
-        },
-      ]);
-      setBusy(false);
-    }, 700);
-  }
   return (
     <div className="app">
       <aside className={mobile ? 'sidebar open' : 'sidebar'}>
@@ -362,65 +338,7 @@ function App() {
             </button>
           </div>
           {page === 'AIアシスタント' ? (
-            <section className="ai-work">
-              <div className="ai-source">
-                <h3>参照する資料</h3>
-                <p>問題に使う資料を選択してください</p>
-                {docs.map((d) => (
-                  <label key={d.id}>
-                    <input
-                      type="checkbox"
-                      checked={sources.includes(d.id)}
-                      onChange={(e) =>
-                        setSources((s) =>
-                          e.target.checked ? [...s, d.id] : s.filter((i) => i !== d.id),
-                        )
-                      }
-                    />
-                    {d.title}
-                  </label>
-                ))}
-              </div>
-              <div className="chat">
-                <div className="chat-intro">
-                  <Sparkles size={30} />
-                  <h2>学びたいことを、あなたの言葉で。</h2>
-                  <p>過去問の復習や、模擬問題の作成をお手伝いします。</p>
-                  <span className="badge">デモモード · AI未接続</span>
-                </div>
-                {messages.map((m, i) => (
-                  <div className={'message ' + m.role} key={i}>
-                    {m.text}
-                  </div>
-                ))}
-                {busy && <p>プレビューを準備しています…</p>}
-                <div className="suggestions">
-                  {['選択した過去問から模擬問題を作って', '重要なポイントを復習したい'].map((t) => (
-                    <button key={t} onClick={() => setPrompt(t)}>
-                      {t}
-                      <ArrowUpRight size={14} />
-                    </button>
-                  ))}
-                </div>
-                <form
-                  className="chat-input"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    generate();
-                  }}
-                >
-                  <textarea
-                    aria-label="AIへの指示"
-                    placeholder="例：統計学の過去問から、解説付きの模擬問題を作って"
-                    value={prompt}
-                    onChange={(e) => setPrompt(e.target.value)}
-                  />
-                  <button className="primary" disabled={busy || !prompt.trim()} aria-label="送信">
-                    <Send size={18} />
-                  </button>
-                </form>
-              </div>
-            </section>
+            <AiAssistant docs={docs} documentId={aiDocumentId} onDocumentChange={setAiDocumentId} />
           ) : (
             <>
               {page === 'ホーム' && (
@@ -449,20 +367,20 @@ function App() {
                   <section className="hero">
                     <div>
                       <span className="hero-kicker">
-                        <Sparkles size={15} /> folio AI <span>あなた専属の学習パートナー</span>
+                        <Sparkles size={15} /> folio AI <span>PDFについて質問する</span>
                       </span>
                       <h2>
-                        その過去問が、
+                        その資料を、
                         <br />
-                        あなただけの模擬問題に。
+                        理解につなげよう。
                       </h2>
                       <p>
-                        「この範囲から問題を作って」と伝えるだけ。
+                        PDFを開いて、気になるページを質問。
                         <br />
                         手元の資料で、もっと自分らしく学ぼう。
                       </p>
                       <button onClick={() => go('AIアシスタント')}>
-                        AIアシスタントを試す <ArrowRight size={17} />
+                        AIアシスタントを開く <ArrowRight size={17} />
                       </button>
                     </div>
                     <div className="hero-art" aria-hidden="true">
@@ -538,6 +456,11 @@ function App() {
               {page === 'すべての資料' && (
                 <FileExplorer
                   entries={entries}
+                  onAskAi={() => {
+                    setAiDocumentId(d.id);
+                    setSelected(null);
+                    go('AIアシスタント');
+                  }}
                   currentFolder={currentFolder}
                   onFolderChange={setCurrentFolder}
                   onOpen={setSelected}
@@ -764,6 +687,11 @@ function App() {
                 key={`${d.id}-${d.revision || 0}`}
                 doc={d}
                 entries={entries}
+                onAskAi={() => {
+                  setAiDocumentId(d.id);
+                  setSelected(null);
+                  go('AIアシスタント');
+                }}
                 onSaved={(result) => {
                   applyLibrary(result);
                   setSelected(result.doc.id);
@@ -773,7 +701,6 @@ function App() {
                 onDelete={async () => {
                   const result = await libraryRepository.remove(d.id);
                   applyLibrary(result);
-                  setSources((s) => s.filter((id) => id !== d.id));
                   setSelected(null);
                   setToast('PDFを削除しました');
                 }}
@@ -820,7 +747,6 @@ function App() {
                           .remove(d.id)
                           .then((result) => {
                             applyLibrary(result);
-                            setSources((s) => s.filter((id) => id !== d.id));
                             setSelected(null);
                             setToast('資料を削除しました');
                           })
@@ -834,7 +760,7 @@ function App() {
                   <button
                     className="primary"
                     onClick={() => {
-                      setSources([d.id]);
+                      setAiDocumentId(d.id);
                       setSelected(null);
                       go('AIアシスタント');
                     }}

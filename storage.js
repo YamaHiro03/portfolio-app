@@ -12,10 +12,10 @@ import {
   formatSize,
 } from './library-model.js';
 let dbPromise;
-const stores = ['files', 'annotations', 'drafts', 'library', 'entries'];
+const stores = ['files', 'annotations', 'drafts', 'library', 'entries', 'aiConversations'];
 function openDB() {
   return (dbPromise ??= new Promise((resolve, reject) => {
-    const req = indexedDB.open('folio-pdf', 3);
+    const req = indexedDB.open('folio-pdf', 4);
     req.onupgradeneeded = () => {
       for (const store of stores)
         if (!req.result.objectStoreNames.contains(store)) {
@@ -201,7 +201,8 @@ export function deletePdf(id) {
   return mutate((entries, tx) => {
     const ids = descendants(entries, id);
     for (const key of ids)
-      for (const store of ['files', 'annotations', 'drafts']) tx.objectStore(store).delete(key);
+      for (const store of ['files', 'annotations', 'drafts', 'aiConversations'])
+        tx.objectStore(store).delete(key);
     return {
       entries: entries.filter((e) => !ids.has(e.id)),
       afterCommit: () => {
@@ -327,4 +328,41 @@ export function saveEdition(doc, mode, pages, note, blob, options = {}) {
       afterCommit: () => clearFastDraft(doc.id),
     };
   });
+}
+
+// A deleted document must never be resurrected by an in-flight AI response.
+export async function saveConversation(id, turns) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(['entries', 'aiConversations'], 'readwrite');
+    const request = tx.objectStore('entries').get(id);
+    let missing = false;
+    request.onsuccess = () => {
+      if (!request.result || request.result.type !== 'file') {
+        missing = true;
+        tx.abort();
+        return;
+      }
+      const safe = turns.map((t) => ({
+        id: t.id,
+        documentId: id,
+        model: t.model,
+        returnedModel: t.returnedModel ?? null,
+        createdAt: t.createdAt,
+        question: t.question,
+        answer: t.answer,
+        context: t.context,
+        from: t.from,
+        to: t.to,
+        revision: t.revision ?? null,
+      }));
+      tx.objectStore('aiConversations').put(safe, id);
+    };
+    tx.oncomplete = resolve;
+    tx.onabort = () =>
+      reject(Error(missing ? '対象PDFが削除されました。' : '会話履歴を保存できませんでした。'));
+  });
+}
+export async function loadConversation(id) {
+  return (await read('aiConversations', id)) || [];
 }

@@ -1,0 +1,76 @@
+.folio-ai {
+  align-items: start;
+}
+.folio-ai .chat {
+  display: block;
+  min-width: 0;
+}
+.folio-ai label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 12px 0;
+}
+.folio-ai input,
+.folio-ai select,
+.folio-ai textarea {
+  font: inherit;
+  padding: 10px;
+  border: 1px solid #d8e2dc;
+  border-radius: 8px;
+  max-width: 100%;
+  width: 100%;
+  background: white;
+  color: #233e33;
+}
+.folio-ai button {
+  margin: 5px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  border: 1px solid #d8e2dc;
+  cursor: pointer;
+}
+.folio-ai button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.folio-ai textarea {
+  min-height: 110px;
+  resize: vertical;
+}
+.folio-ai .ai-preview textarea {
+  min-height: 180px;
+}
+.folio-ai fieldset {
+  padding: 12px;
+  border: 1px solid #d8e2dc;
+  border-radius: 8px;
+}
+.folio-ai .ai-confirm {
+  flex-direction: row;
+  align-items: start;
+}
+.folio-ai .ai-confirm input {
+  width: auto;
+  margin-top: 5px;
+}
+.folio-ai .ai-policy,
+.folio-ai small {
+  font-size: 12px;
+  color: #61736a;
+}
+.folio-ai pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 240px;
+  overflow: auto;
+}
+.folio-ai .message {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.folio-ai .ai-transcript {
+  max-height: 500px;
+  overflow-y: auto;
+  margin: 20px 0;
+}

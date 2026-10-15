@@ -1,3 +1,4 @@
+import { createAiRouter } from './ai.mjs';
 import { officeHealth } from './office-runtime.mjs';
 import express from 'express';
 import multer from 'multer';
@@ -38,6 +39,7 @@ app.use('/api', (req, res, next) => {
   }
   next();
 });
+app.use('/api/ai', createAiRouter());
 app.get('/api/health', async (_, res) => res.json({ status: 'ok', office: await officeHealth() }));
 app.post(
   '/api/convert',
