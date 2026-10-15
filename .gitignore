@@ -32,3 +32,4 @@ __pycache__/
 *.pfx
 *.provisionprofile
 .DS_Store
+.private/

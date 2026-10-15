@@ -1,43 +1,29 @@
 import express from 'express';
-import {
-  AiError,
-  validateSettings,
-  buildMessages,
-  upstreamError,
-} from '../features/ai/protocol.mjs';
-const localNames = new Set(['localhost', '127.0.0.1', '[::1]']);
-function localAddress(address) {
-  return ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(address);
-}
-function localOrigin(value) {
-  try {
-    const u = new URL(value);
-    return ['http:', 'https:'].includes(u.protocol) && localNames.has(u.hostname);
-  } catch {
-    return false;
-  }
-}
-export function createAiRouter({ fetchImpl = fetch, timeoutMs = 60000 } = {}) {
+import { AiError, buildMessages, upstreamError } from '../features/ai/protocol.mjs';
+import { readAiConfig, gatewaySettings } from './ai-config.mjs';
+import { createAiAccess } from './ai-access.mjs';
+export function createAiRouter({
+  fetchImpl = fetch,
+  timeoutMs = 60000,
+  config = readAiConfig(),
+  log,
+  now,
+} = {}) {
   const router = express.Router();
-  router.use((req, res, next) => {
-    res.set('Cache-Control', 'no-store');
-    // Do not expose this relay from a deployed or LAN-facing server, even with CORS configured.
-    if (
-      !localAddress(req.socket.remoteAddress) ||
-      !localNames.has(req.hostname) ||
-      !localOrigin(req.get('origin')) ||
-      req.get('x-folio-ai') !== '1' ||
-      req.get('x-forwarded-for')
-    )
-      return res
-        .status(403)
-        .json({ code: 'local_only', error: 'AI接続はPC上のlocalhost版のみ利用できます。' });
-    if (!req.is('application/json'))
-      return res.status(415).json({ code: 'format', error: 'JSON形式で送信してください。' });
-    next();
-  });
+  const access = createAiAccess(config, { log, now });
+  router.use(access.guard);
   router.use(express.json({ limit: '128kb' }));
+  router.post('/session', access.login);
+  router.use(access.authenticate);
+  router.delete('/session', access.logout);
+  let active = 0;
   router.post('/:operation', async (req, res) => {
+    if (active >= 2)
+      return res.status(429).json({
+        code: 'request_limit',
+        error: 'AIが処理中です。しばらく待って手動で送信してください。',
+      });
+    active++;
     const controller = new AbortController();
     const disconnected = () => {
       if (!res.writableEnded) controller.abort();
@@ -51,9 +37,11 @@ export function createAiRouter({ fetchImpl = fetch, timeoutMs = 60000 } = {}) {
     try {
       if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body))
         throw new AiError('format', 'リクエストの形式が不正です。');
-      const { baseUrl, apiKey, model } = validateSettings(req.body.settings);
+      if (req.body.settings !== undefined)
+        throw new AiError('format', '接続設定はクライアントから変更できません。');
+      const { baseUrl, apiKey, model } = gatewaySettings(config);
       const operation = req.params.operation;
-      if (!['models', 'test', 'message'].includes(operation))
+      if (!['models', 'test', 'status', 'message'].includes(operation))
         throw new AiError('format', '不明な操作です。');
       const path = operation === 'message' ? '/chat/completions' : '/models';
       const payload =
@@ -100,12 +88,9 @@ export function createAiRouter({ fetchImpl = fetch, timeoutMs = 60000 } = {}) {
         if (!Array.isArray(data.data) || data.data.some((m) => typeof m.id !== 'string'))
           throw new AiError('format', 'モデル一覧の形式が不正です。', 502);
         const models = data.data.map((m) => m.id);
-        if (operation === 'test' && !models.includes(model))
-          throw new AiError(
-            'model',
-            '接続できましたが指定モデルが一覧にありません。手動でモデルを確認してください。',
-          );
-        return res.json({ models });
+        if (['test', 'status'].includes(operation) && !models.includes(model))
+          throw new AiError('model', '現在のAIを利用できません。管理者に確認してください。');
+        return res.json(operation === 'models' ? { models } : { ready: true, model });
       }
       const text = data.choices?.[0]?.message?.content;
       if (typeof text !== 'string' || !text.trim())
@@ -130,11 +115,14 @@ export function createAiRouter({ fetchImpl = fetch, timeoutMs = 60000 } = {}) {
               )
             : new AiError(
                 'unavailable',
-                'Gatewayに接続できないか通信が中断されました。起動状態を確認してください。自動再送信はしません。',
+                'AIに接続できないか通信が中断されました。管理者に確認してください。自動再送信はしません。',
                 502,
               );
-      res.status(known.status).json({ code: known.code, error: known.message });
+      res
+        .status(known.status)
+        .json({ code: known.code, error: known.message, requestId: res.locals.aiRequestId });
     } finally {
+      active--;
       clearTimeout(timer);
       res.off('close', disconnected);
     }

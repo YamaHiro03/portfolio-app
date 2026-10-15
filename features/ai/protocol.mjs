@@ -1,5 +1,4 @@
 // Shared limits bound requests without guessing a model's token budget.
-export const DEFAULT_SETTINGS = { baseUrl: 'http://127.0.0.1:8317/v1', model: 'gpt-6-luna' };
 export const MAX_CONTEXT_CHARS = 12000;
 export const MAX_REQUEST_CHARS = 24000;
 export const MAX_QUESTION_CHARS = 3000;
@@ -9,41 +8,6 @@ export class AiError extends Error {
     this.code = code;
     this.status = status;
   }
-}
-export function normalizeBaseUrl(value) {
-  let url;
-  try {
-    url = new URL(value);
-  } catch {
-    throw new AiError('settings', 'GatewayのURLを確認してください。');
-  }
-  // First release deliberately permits only local gateways, never a public paid endpoint.
-  if (
-    !['http:', 'https:'].includes(url.protocol) ||
-    !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname) ||
-    url.username ||
-    url.password ||
-    url.search ||
-    url.hash
-  )
-    throw new AiError(
-      'settings',
-      'Gatewayにはローカル（127.0.0.1 / localhost / ::1）のURLを指定してください。',
-    );
-  return url.href.replace(/\/+$/, '');
-}
-export function validateSettings(settings) {
-  const baseUrl = normalizeBaseUrl(settings?.baseUrl);
-  if (
-    typeof settings.apiKey !== 'string' ||
-    !settings.apiKey.trim() ||
-    settings.apiKey.length > 4096 ||
-    /[\r\n]/.test(settings.apiKey)
-  )
-    throw new AiError('authentication', 'CLIProxyAPIのローカルAPIキーを入力してください。', 401);
-  if (typeof settings.model !== 'string' || !settings.model.trim() || settings.model.length > 200)
-    throw new AiError('model', '使用するモデルIDを入力してください。');
-  return { baseUrl, apiKey: settings.apiKey, model: settings.model.trim() };
 }
 export function buildMessages(context, question, history = []) {
   if (typeof context !== 'string' || !context.trim() || context.length > MAX_CONTEXT_CHARS)
@@ -79,7 +43,11 @@ export function buildMessages(context, question, history = []) {
 export function upstreamError(status, data) {
   const code = String(data?.error?.code || data?.error?.type || '');
   if (status === 401 || status === 403)
-    return new AiError('authentication', 'GatewayのAPIキーまたは認証状態を確認してください。', 401);
+    return new AiError(
+      'authentication',
+      'AI接続の認証に失敗しました。管理者に確認してください。',
+      401,
+    );
   if (
     status === 429 ||
     status === 402 ||
@@ -97,14 +65,10 @@ export function upstreamError(status, data) {
       400,
     );
   if (status === 404 || /model/.test(code))
-    return new AiError(
-      'model',
-      'モデルが利用できません。モデル一覧を確認し、手動で変更してください。',
-      400,
-    );
+    return new AiError('model', '現在のAIを利用できません。管理者に確認してください。', 400);
   return new AiError(
     'gateway',
-    'Gatewayがエラーを返しました。設定とGateway側の状態を確認してください。自動再送信はしません。',
+    'AIから回答を取得できませんでした。管理者に確認してください。自動再送信はしません。',
     502,
   );
 }

@@ -1,15 +1,16 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { isNativeApp } from '../../mobile-runtime';
 import { loadConversation, saveConversation } from '../../storage';
-import { createAiClient, loadSettings, saveSettings } from './client.mjs';
+import { getAiClient, backendOrigin } from './client.mjs';
 import { buildMessages, MAX_QUESTION_CHARS } from './protocol.mjs';
 import { extractDocumentContext } from './pdf-context';
 import './ai.css';
 
 export default function AiAssistant({ docs, documentId, onDocumentChange }) {
-  const [settings, setSettings] = useState(loadSettings);
-  const [models, setModels] = useState([]),
-    [notice, setNotice] = useState(''),
+  const [password, setPassword] = useState(''),
+    [authenticated, setAuthenticated] = useState(false),
+    [connection, setConnection] = useState('未接続');
+  const [notice, setNotice] = useState(''),
     [error, setError] = useState('');
   const [turns, setTurns] = useState([]),
     [historyReady, setHistoryReady] = useState(false);
@@ -22,15 +23,31 @@ export default function AiAssistant({ docs, documentId, onDocumentChange }) {
   const [busy, setBusy] = useState(''),
     [unsaved, setUnsaved] = useState(null);
   const client = useRef(null);
-  if (!client.current) client.current = createAiClient();
+  let unavailable = false;
+  let baseUrl = '';
+  try {
+    baseUrl = backendOrigin({
+      configured: import.meta.env.VITE_FOLIO_BACKEND_URL || '',
+      native: isNativeApp(),
+      development: import.meta.env.DEV,
+      origin: location.origin,
+    });
+  } catch {
+    unavailable = true;
+  }
+  if (!client.current) client.current = getAiClient(baseUrl);
   const extraction = useRef(null),
     alive = useRef(true);
   const doc = docs.find(
     (d) => d.id === documentId && (d.storedPdf || d.mime === 'application/pdf'),
   );
-  const disabled =
-    isNativeApp() || !['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
+  const disabled = unavailable;
   useEffect(() => {
+    try {
+      localStorage.removeItem('folio-ai-settings-v1');
+    } catch {}
+    setAuthenticated(client.current.isAuthenticated());
+    if (client.current.isAuthenticated()) setConnection('ログイン済み');
     alive.current = true;
     return () => {
       alive.current = false;
@@ -78,6 +95,10 @@ export default function AiAssistant({ docs, documentId, onDocumentChange }) {
     try {
       await action();
     } catch (e) {
+      if (alive.current) {
+        setAuthenticated(client.current.isAuthenticated());
+        setConnection(e.code === 'session' ? 'ログインが必要です' : '接続を確認してください');
+      }
       if (alive.current)
         setError(
           e.name === 'AbortError'
@@ -88,15 +109,6 @@ export default function AiAssistant({ docs, documentId, onDocumentChange }) {
       if (alive.current) setBusy('');
     }
   }
-  function changeSettings(key, value) {
-    setSettings((s) => ({ ...s, [key]: value }));
-    setConfirmed(false);
-  }
-  function persistSettings() {
-    const saved = saveSettings(settings);
-    setSettings(saved);
-    return saved;
-  }
   const selectedHistory = historyCount ? turns.slice(-historyCount) : [];
   const history = selectedHistory.flatMap((t) => [
     { role: 'user', content: t.question },
@@ -104,11 +116,20 @@ export default function AiAssistant({ docs, documentId, onDocumentChange }) {
   ]);
   async function submit(e) {
     e.preventDefault();
-    if (busy || !confirmed || !context || !doc || !historyReady || unsaved || disabled) return;
+    if (
+      busy ||
+      !confirmed ||
+      !context ||
+      !doc ||
+      !historyReady ||
+      unsaved ||
+      disabled ||
+      !authenticated
+    )
+      return;
     await perform('回答を生成しています…', async () => {
-      const currentSettings = persistSettings();
       buildMessages(context.text, question, history);
-      const response = await client.current.sendMessage(currentSettings, {
+      const response = await client.current.sendMessage({
         context: context.text,
         question,
         history,
@@ -164,111 +185,66 @@ export default function AiAssistant({ docs, documentId, onDocumentChange }) {
           </select>
         </label>
         {doc && <p>対象：{doc.title}</p>}
-        <details open>
-          <summary>CLIProxyAPI接続設定</summary>
-          <label>
-            Gateway URL
-            <input
-              aria-label="Gateway URL"
-              value={settings.baseUrl}
-              disabled={!!busy || disabled}
-              onChange={(e) => changeSettings('baseUrl', e.target.value)}
-            />
-          </label>
-          <label>
-            ローカルAPIキー
-            <input
-              aria-label="ローカルAPIキー"
-              type="password"
-              autoComplete="off"
-              value={settings.apiKey}
-              disabled={!!busy || disabled}
-              onChange={(e) => changeSettings('apiKey', e.target.value)}
-            />
-          </label>
-          <small>キーはメモリ内のみ保持します。再読み込み後は再入力してください。</small>
-          <label>
-            使用モデル
-            <input
-              aria-label="使用モデル"
-              list="folio-ai-models"
-              value={settings.model}
-              disabled={!!busy || disabled}
-              onChange={(e) => changeSettings('model', e.target.value)}
-            />
-          </label>
-          <datalist id="folio-ai-models">
-            {[...new Set(['gpt-6-luna', 'gpt-6-astra', ...models])].map((id) => (
-              <option key={id} value={id} />
-            ))}
-          </datalist>
-          <button
-            type="button"
-            disabled={!!busy || disabled}
-            onClick={() =>
-              perform('設定を保存しています…', async () => {
-                persistSettings();
-                setNotice('URLとモデルを保存しました。キーはメモリ内のみです。');
-              })
-            }
-          >
-            接続設定を保存
-          </button>
-          <button
-            type="button"
-            disabled={!!busy || disabled}
-            onClick={() =>
-              perform('接続を確認しています…', async () => {
-                await client.current.testConnection(persistSettings());
+        <p role="status">{disabled ? 'AIは現在利用できません' : connection}</p>
+        {!authenticated && !disabled && (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (busy) return;
+              perform('ログインしています…', async () => {
+                const accessCode = password;
+                setPassword('');
+                await client.current.login(accessCode);
+                if (!alive.current) return;
+                setAuthenticated(true);
+                const result = await client.current.status();
                 if (alive.current)
-                  setNotice(
-                    '接続と指定モデルの一覧掲載を確認しました。推論の実行可否・残量は未確認です。',
-                  );
-              })
-            }
+                  setConnection(result.ready ? '接続済み' : '接続を確認してください');
+              });
+            }}
           >
-            接続テスト
-          </button>
+            <label>
+              デモのアクセスコード
+              <input
+                aria-label="デモのアクセスコード"
+                type="password"
+                autoComplete="off"
+                value={password}
+                disabled={!!busy}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </label>
+            <button disabled={!!busy || !password}>ログイン</button>
+          </form>
+        )}
+        {authenticated && (
           <button
-            type="button"
-            disabled={!!busy || disabled}
+            disabled={!!busy}
             onClick={() =>
-              perform('モデル一覧を取得しています…', async () => {
-                const result = await client.current.getModels(persistSettings());
-                if (alive.current) {
-                  setModels(result.models);
-                  setNotice('モデル一覧を取得しました。使用モデルは自動変更しません。');
+              perform('ログアウトしています…', async () => {
+                try {
+                  await client.current.logout();
+                } finally {
+                  setAuthenticated(false);
+                  setConnection('未接続');
                 }
               })
             }
           >
-            モデル一覧を取得
+            ログアウト
           </button>
-          {!!models.length && (
-            <ul aria-label="利用可能モデル一覧">
-              {models.map((id) => (
-                <li key={id}>{id}</li>
-              ))}
-            </ul>
-          )}
-        </details>
+        )}
         <p className="ai-policy">
-          有料APIへのフォールバック・自動モデル変更・自動再試行は行いません。利用枠残量は取得できないため表示しません。Gateway側の課金設定や請求額は保証できません。
+          自動再送信や追加課金への切り替えは行いません。利用枠残量は表示しません。
         </p>
       </aside>
       <div className="chat">
         <h2>PDFについて質問する</h2>
-        <p>
-          使用モデル：<strong>{settings.model}</strong>
-        </p>
         {disabled && (
-          <p role="alert">
-            AI機能はWindows＋WSL2などのPC上のlocalhost版専用です。Android /
-            iOS・LAN・公開版では接続できません。
-          </p>
+          <p role="alert">AIは現在利用できません。管理者に接続状態を確認してください。</p>
         )}
         {!doc && <p>PDFを開いて「このPDFに質問」から開始するか、対象資料を選んでください。</p>}
-        <fieldset disabled={!!busy || !doc || disabled}>
+        <fieldset disabled={!!busy || !doc || disabled || !authenticated}>
           <legend>送信する本文を準備（最大5ページ・12,000文字）</legend>
           <label>
             開始ページ
@@ -361,10 +337,7 @@ export default function AiAssistant({ docs, documentId, onDocumentChange }) {
           {turns.map((t) => (
             <article key={t.id}>
               <small>
-                {t.model}／{t.from}〜{t.to}ページ／{new Date(t.createdAt).toLocaleString()}
-                {t.returnedModel && t.returnedModel !== t.model
-                  ? `（Gateway応答モデル：${t.returnedModel}）`
-                  : ''}
+                AI／{t.from}〜{t.to}ページ／{new Date(t.createdAt).toLocaleString()}
               </small>
               <div className="message user">{t.question}</div>
               <div className="message ai">{t.answer}</div>
@@ -382,7 +355,7 @@ export default function AiAssistant({ docs, documentId, onDocumentChange }) {
               aria-label="AIへの指示"
               maxLength={MAX_QUESTION_CHARS}
               value={question}
-              disabled={!!busy || disabled}
+              disabled={!!busy || disabled || !authenticated}
               onChange={(e) => {
                 setQuestion(e.target.value);
                 setConfirmed(false);
@@ -394,16 +367,22 @@ export default function AiAssistant({ docs, documentId, onDocumentChange }) {
             <input
               type="checkbox"
               checked={confirmed}
-              disabled={!context || !!busy || disabled}
+              disabled={!context || !!busy || disabled || !authenticated}
               onChange={(e) => setConfirmed(e.target.checked)}
             />
-            対象資料・本文・質問・送信履歴・モデルを確認し、Gatewayへ送信します
+            対象資料・本文・質問・送信履歴を確認し、AIへ送信します
           </label>
           <button
             className="primary"
             aria-label="送信"
             disabled={
-              !!busy || !confirmed || !question.trim() || !historyReady || !!unsaved || disabled
+              !!busy ||
+              !confirmed ||
+              !question.trim() ||
+              !historyReady ||
+              !!unsaved ||
+              disabled ||
+              !authenticated
             }
           >
             送信

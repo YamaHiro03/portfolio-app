@@ -33,6 +33,7 @@ concurrency:
 
 env:
   VITE_CONVERSION_SERVER: ${{ vars.VITE_CONVERSION_SERVER }}
+  VITE_FOLIO_BACKEND_URL: ${{ vars.VITE_FOLIO_BACKEND_URL }}
 
 jobs:
   android:

@@ -16,3 +16,4 @@ artifacts
 *.keystore
 *.mobileprovision
 **/__pycache__
+.private

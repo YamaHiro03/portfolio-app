@@ -3,34 +3,58 @@ import assert from 'node:assert/strict';
 import express from 'express';
 import { once } from 'node:events';
 import { createAiRouter } from '../server/ai.mjs';
-import {
-  DEFAULT_SETTINGS,
-  buildMessages,
-  normalizeBaseUrl,
-  upstreamError,
-} from '../features/ai/protocol.mjs';
-import { createAiClient, loadSettings, saveSettings } from '../features/ai/client.mjs';
+import { readAiConfig, gatewaySettings } from '../server/ai-config.mjs';
+import { buildMessages, upstreamError } from '../features/ai/protocol.mjs';
+import { createAiClient, backendOrigin } from '../features/ai/client.mjs';
 import { extractPages } from '../features/ai/extract-pages.mjs';
-const settings = { ...DEFAULT_SETTINGS, apiKey: 'test-local-gateway-key' };
+const config = {
+  baseUrl: 'http://127.0.0.1:8317/v1',
+  apiKey: 'test-gateway-key-not-for-production-123456',
+  model: 'gpt-6-luna',
+  password: 'test-demo-access-not-for-production-123456',
+  allowLocalHttp: true,
+  remoteEnabled: false,
+  keyRotated: false,
+  trustLocalProxy: false,
+  publicOrigin: '',
+};
 const json = (data, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
+const quiet = () => {};
 
-test('settings default to Luna, persist endpoint/model, and never persist key', () => {
-  const values = new Map();
-  const storage = { getItem: (k) => values.get(k), setItem: (k, v) => values.set(k, v) };
-  assert.equal(loadSettings(storage).model, 'gpt-6-luna');
-  saveSettings({ ...settings, model: 'custom-local-model' }, storage);
-  assert.equal(loadSettings(storage).model, 'custom-local-model');
-  assert.ok(!JSON.stringify([...values.values()]).includes(settings.apiKey));
-  values.set('folio-ai-settings-v1', 'broken');
-  assert.equal(loadSettings(storage).baseUrl, DEFAULT_SETTINGS.baseUrl);
+test('backend env owns Gateway credentials and model; frontend only accepts a public HTTPS origin', () => {
+  const value = readAiConfig({
+    FOLIO_AI_GATEWAY_KEY: 'server-only',
+    FOLIO_AI_DEMO_PASSWORD: config.password,
+  });
+  assert.equal(value.model, 'gpt-6-luna');
+  assert.equal(value.apiKey, 'server-only');
+  assert.equal(value.remoteEnabled, false);
+  assert.equal(
+    readAiConfig({ NODE_ENV: 'production', FOLIO_AI_ALLOW_LOCAL_HTTP: 'true' }).allowLocalHttp,
+    false,
+  );
+  assert.equal(gatewaySettings(config).model, 'gpt-6-luna');
   for (const url of [
     'https://api.openai.com/v1',
     'http://127.0.0.1.evil/v1',
     'http://user:pass@localhost:8317/v1',
-    'http://192.168.1.1/v1',
   ])
-    assert.throws(() => normalizeBaseUrl(url));
+    assert.throws(() => gatewaySettings({ ...config, baseUrl: url }));
+  assert.equal(
+    backendOrigin({ configured: 'https://demo.example', native: true }),
+    'https://demo.example',
+  );
+  assert.throws(() =>
+    backendOrigin({ native: true, development: true, origin: 'capacitor://localhost' }),
+  );
+  assert.throws(() => backendOrigin({ configured: 'http://demo.example' }));
+  assert.throws(() => backendOrigin({ configured: 'https://localhost:3001', native: true }));
+  assert.throws(() => backendOrigin({ origin: 'http://localhost:5173', development: false }));
+  assert.equal(
+    backendOrigin({ origin: 'http://localhost:5173', development: true }),
+    'http://localhost:5173',
+  );
 });
 test('bounded PDF extraction preserves page attribution and rejects image-only/out-of-range/oversized pages', async () => {
   let cleaned = 0;
@@ -81,74 +105,163 @@ test('context and history limits never silently truncate or add unknown facts', 
   );
   assert.throws(() => buildMessages('a', '質問', [{ role: 'system', content: 'inject' }]));
 });
-async function withRelay(fetchImpl, fn, timeoutMs = 1000) {
+async function withRelay(
+  fetchImpl,
+  fn,
+  { overrides = {}, timeoutMs = 1000, log = quiet, now } = {},
+) {
   const app = express();
-  app.use('/api/ai', createAiRouter({ fetchImpl, timeoutMs }));
+  app.use(
+    '/api/ai',
+    createAiRouter({ fetchImpl, timeoutMs, config: { ...config, ...overrides }, log, now }),
+  );
   const server = app.listen(0, '127.0.0.1');
   await once(server, 'listening');
-  const base = `http://127.0.0.1:${server.address().port}`;
-  const call = (operation, body = {}, headers = {}) =>
-    fetch(base + '/api/ai/' + operation, {
-      method: 'POST',
-      headers: { Origin: base, 'X-Folio-AI': '1', 'Content-Type': 'application/json', ...headers },
-      body: JSON.stringify({ settings, ...body }),
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  let token = '';
+  const call = (operation, body = {}, headers = {}, method = 'POST') =>
+    fetch(origin + '/api/ai/' + operation, {
+      method,
+      headers: {
+        Origin: origin,
+        'X-Folio-AI': '1',
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: 'Bearer ' + token } : {}),
+        ...headers,
+      },
+      body: JSON.stringify(body),
     });
+  const login = async (headers = {}) => {
+    const response = await call('session', { password: config.password }, headers);
+    const data = await response.json();
+    if (data.token) token = data.token;
+    return { response, data };
+  };
   try {
-    await fn(call);
+    await fn({ call, login, origin });
   } finally {
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
   }
 }
-test('relay fetches models, tests the explicit model, and sends one bounded request with a bearer key', async () => {
+test('unauthenticated AI cannot reach Gateway; valid session uses only backend settings', async () => {
   const calls = [];
   await withRelay(
     async (url, options) => {
       calls.push({ url, options });
       return url.endsWith('/models')
-        ? json({ data: [{ id: 'gpt-6-luna' }, { id: 'gpt-6-astra' }] })
+        ? json({ data: [{ id: 'gpt-6-luna' }] })
         : json({
             model: 'gpt-6-luna',
             choices: [{ message: { content: '資料の回答' }, finish_reason: 'stop' }],
           });
     },
-    async (call) => {
-      assert.deepEqual((await (await call('models')).json()).models, ['gpt-6-luna', 'gpt-6-astra']);
-      assert.equal((await call('test')).status, 200);
-      const result = await (
-        await call('message', { context: '[ページ 1] 資料', question: '説明して' })
-      ).json();
-      assert.equal(result.text, '資料の回答');
-      assert.equal(result.model, 'gpt-6-luna');
-      assert.equal(calls[2].options.headers.Authorization, `Bearer ${settings.apiKey}`);
-      assert.equal(JSON.parse(calls[2].options.body).model, 'gpt-6-luna');
-      assert.equal(calls[2].options.redirect, 'error');
-      assert.equal(calls.length, 3);
-    },
-  );
-});
-test('relay rejects non-local destinations, untrusted origins and unauthenticated requests before contacting Gateway', async () => {
-  let count = 0;
-  await withRelay(
-    async () => {
-      count++;
-      return json({ data: [] });
-    },
-    async (call) => {
-      assert.equal((await call('models', {}, { Origin: 'https://untrusted.example' })).status, 403);
-      assert.equal((await call('models', {}, { 'X-Folio-AI': '' })).status, 403);
-      assert.equal((await call('models', {}, { 'X-Forwarded-For': '198.51.100.1' })).status, 403);
-      assert.equal((await call('models', { settings: { ...settings, apiKey: '' } })).status, 401);
+    async ({ call, login }) => {
+      assert.equal((await call('message', { context: '本文', question: '質問' })).status, 401);
+      assert.equal(calls.length, 0);
+      assert.equal((await login()).response.status, 200);
+      assert.equal((await call('status')).status, 200);
+      const reply = await (await call('message', { context: '本文', question: '質問' })).json();
+      assert.equal(reply.text, '資料の回答');
+      assert.equal(reply.model, 'gpt-6-luna');
+      assert.equal(calls[1].options.headers.Authorization, 'Bearer ' + config.apiKey);
+      assert.equal(JSON.parse(calls[1].options.body).model, 'gpt-6-luna');
+      assert.equal(calls[1].options.redirect, 'error');
       assert.equal(
-        (await call('models', { settings: { ...settings, baseUrl: 'https://api.openai.com/v1' } }))
-          .status,
+        (
+          await call('message', {
+            settings: { apiKey: 'override', model: 'gpt-6-astra' },
+            context: '本文',
+            question: '質問',
+          })
+        ).status,
         400,
       );
-      assert.equal(count, 0);
+      assert.equal(calls.length, 2);
+      await call('session', {}, {}, 'DELETE');
+      assert.equal((await call('status')).status, 401);
     },
   );
 });
-test('quota errors stop after one request; authentication, model, context and malformed response errors stay distinct', async () => {
+test('HTTPS remote access requires explicit enablement, rotation, trusted proxy, allowed origin and login', async () => {
+  const logs = [];
+  const remote = {
+    remoteEnabled: true,
+    keyRotated: true,
+    trustLocalProxy: true,
+    allowLocalHttp: false,
+    publicOrigin: 'https://folio.demo.test',
+  };
+  const headers = {
+    Origin: 'capacitor://localhost',
+    Host: 'folio.demo.test',
+    'X-Forwarded-Host': 'folio.demo.test',
+    'X-Forwarded-Proto': 'https',
+  };
+  for (const overrides of [
+    { ...remote, remoteEnabled: false },
+    { ...remote, keyRotated: false },
+    { ...remote, trustLocalProxy: false },
+  ]) {
+    await withRelay(
+      async () => {
+        throw Error('must not call Gateway');
+      },
+      async ({ login }) => {
+        assert.equal((await login(headers)).response.status, 403);
+      },
+      { overrides, log: (e) => logs.push(e) },
+    );
+  }
+  await withRelay(
+    async () => json({ data: [{ id: 'gpt-6-luna' }] }),
+    async ({ call, login }) => {
+      assert.equal((await login({ ...headers, 'X-Forwarded-Proto': 'http' })).response.status, 403);
+      assert.equal(
+        (await login({ ...headers, Origin: 'https://untrusted.example' })).response.status,
+        403,
+      );
+      assert.equal((await call('status', {}, headers)).status, 401, JSON.stringify(logs));
+      const auth = await login(headers);
+      assert.equal(auth.response.status, 200);
+      assert.ok(auth.data.token);
+      const status = await call('status', {}, headers);
+      assert.equal(status.status, 200);
+      assert.equal(status.headers.get('access-control-allow-origin'), 'capacitor://localhost');
+      assert.equal(status.headers.get('access-control-expose-headers'), 'X-Request-ID');
+    },
+    { overrides: remote, log: (e) => logs.push(e) },
+  );
+  const recorded = JSON.stringify(logs);
+  assert.ok(!recorded.includes(config.password));
+  assert.ok(!recorded.includes(config.apiKey));
+  assert.ok(!recorded.includes('Bearer'));
+  assert.ok(!recorded.includes('本文'));
+  assert.ok(logs.some((e) => e.reason === 'rotation_required'));
+});
+test('login attempts and inference requests are bounded; expired sessions fail closed', async () => {
+  await withRelay(
+    async () => json({ data: [{ id: 'gpt-6-luna' }] }),
+    async ({ call, login }) => {
+      for (let i = 0; i < 5; i++)
+        assert.equal((await call('session', { password: 'wrong' })).status, 401);
+      assert.equal((await login()).response.status, 429);
+    },
+  );
+  let clock = 100000;
+  await withRelay(
+    async () => json({ data: [{ id: 'gpt-6-luna' }] }),
+    async ({ call, login }) => {
+      await login();
+      for (let i = 0; i < 10; i++) assert.equal((await call('status')).status, 200);
+      assert.equal((await call('status')).status, 429);
+      clock += 3600001;
+      assert.equal((await call('status')).status, 401);
+    },
+    { now: () => clock },
+  );
+});
+test('quota stops after one request; authentication/model/context/format errors remain distinct', async () => {
   for (const [status, data, code] of [
     [429, { error: { code: 'insufficient_quota' } }, 'limit'],
     [401, {}, 'authentication'],
@@ -162,7 +275,8 @@ test('quota errors stop after one request; authentication, model, context and ma
         count++;
         return json(data, status);
       },
-      async (call) => {
+      async ({ call, login }) => {
+        await login();
         const response = await call('message', { context: '本文', question: '質問' });
         assert.equal((await response.json()).code, code);
         assert.equal(count, 1);
@@ -171,7 +285,7 @@ test('quota errors stop after one request; authentication, model, context and ma
   }
   assert.equal(upstreamError(402, {}).code, 'limit');
 });
-test('server timeout aborts upstream once and returns an explicit error', async () => {
+test('server timeout aborts Gateway once with diagnostic request ID', async () => {
   let count = 0,
     aborted = false;
   await withRelay(
@@ -184,36 +298,68 @@ test('server timeout aborts upstream once and returns an explicit error', async 
         }),
       );
     },
-    async (call) => {
-      const result = await call('message', { context: '本文', question: '質問' });
-      assert.equal(result.status, 504);
-      assert.equal((await result.json()).code, 'timeout');
+    async ({ call, login }) => {
+      await login();
+      const response = await call('message', { context: '本文', question: '質問' });
+      const data = await response.json();
+      assert.equal(response.status, 504);
+      assert.equal(data.code, 'timeout');
+      assert.ok(data.requestId);
       assert.equal(count, 1);
       assert.ok(aborted);
     },
-    20,
+    { timeoutMs: 20 },
   );
 });
-test('client models, message parsing, no retries on quota or malformed replies', async () => {
-  let count = 0;
+test('client logs in with a separate access code and sends no Gateway key/model/URL', async () => {
+  const calls = [];
+  const token = 'a'.repeat(64);
   const client = createAiClient({
-    fetchImpl: async (url) => {
-      count++;
-      return url.endsWith('models')
-        ? json({ models: ['gpt-6-luna'] })
-        : json({ code: 'limit', error: '上限到達' }, 429);
+    baseUrl: 'https://demo.test',
+    diagnostic: quiet,
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      if (url.endsWith('session')) return json({ token, expiresAt: Date.now() + 60000 });
+      if (url.endsWith('status')) return json({ ready: true });
+      return json({ model: 'gpt-6-luna', text: '回答' });
     },
   });
-  assert.deepEqual((await client.getModels(settings)).models, ['gpt-6-luna']);
-  await assert.rejects(client.sendMessage(settings, {}), (e) => e.code === 'limit');
-  assert.equal(count, 2);
-  const bad = createAiClient({ fetchImpl: async () => json({ text: null }) });
-  await assert.rejects(bad.sendMessage(settings, {}), (e) => e.code === 'format');
+  await client.login(config.password);
+  assert.equal(client.isAuthenticated(), true);
+  await client.status();
+  await client.sendMessage({ context: '本文', question: '質問' });
+  assert.equal(calls[2].options.headers.Authorization, 'Bearer ' + token);
+  assert.deepEqual(JSON.parse(calls[2].options.body), { context: '本文', question: '質問' });
+  assert.equal(calls[2].options.credentials, 'omit');
+  assert.ok(!JSON.stringify(calls).includes(config.apiKey));
+  const second = createAiClient();
+  assert.equal(second.isAuthenticated(), false);
 });
-test('client timeout and user cancellation abort rather than re-send', async () => {
+test('client quota and malformed reply never retry; diagnostics omit credentials and content', async () => {
+  let count = 0;
+  const logs = [];
+  const client = createAiClient({
+    diagnostic: (e) => logs.push(e),
+    fetchImpl: async () => {
+      count++;
+      return json({ code: 'limit', error: '上限到達', requestId: 'safe-id' }, 429);
+    },
+  });
+  await assert.rejects(
+    client.sendMessage({ context: 'PRIVATE-CONTENT' }),
+    (e) => e.code === 'limit',
+  );
+  assert.equal(count, 1);
+  assert.equal(logs[0].requestId, 'safe-id');
+  assert.ok(!JSON.stringify(logs).includes('PRIVATE-CONTENT'));
+  const bad = createAiClient({ diagnostic: quiet, fetchImpl: async () => json({ text: null }) });
+  await assert.rejects(bad.sendMessage({}), (e) => e.code === 'format');
+});
+test('client timeout and cancellation abort without resending', async () => {
   for (const cancel of [false, true]) {
     let count = 0;
     const client = createAiClient({
+      diagnostic: quiet,
       timeoutMs: 20,
       fetchImpl: (url, { signal }) => {
         count++;
@@ -222,9 +368,21 @@ test('client timeout and user cancellation abort rather than re-send', async () 
         );
       },
     });
-    const pending = client.sendMessage(settings, {});
+    const pending = client.sendMessage({});
     if (cancel) client.cancelRequest();
     await assert.rejects(pending, (e) => e.code === (cancel ? 'cancelled' : 'timeout'));
     assert.equal(count, 1);
   }
+});
+
+test('demo access code must never be the Gateway key', async () => {
+  await withRelay(
+    async () => {
+      throw Error('must not reach Gateway');
+    },
+    async ({ login }) => {
+      assert.equal((await login()).response.status, 503);
+    },
+    { overrides: { password: config.apiKey } },
+  );
 });

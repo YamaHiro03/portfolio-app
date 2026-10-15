@@ -1,10 +1,12 @@
 import { test as base, expect } from '@playwright/test';
 import { createServer } from 'node:http';
+import express from 'express';
+import { createAiRouter } from '../server/ai.mjs';
 import { once } from 'node:events';
 import { PDFDocument } from 'pdf-lib';
 import { pdfFixture } from './fixtures';
 const test = base.extend({
-  gateway: async ({}, use) => {
+  gateway: async ({ page }, use) => {
     const state = { requests: [], mode: 'answer' };
     const server = createServer(async (req, res) => {
       let body = '';
@@ -15,7 +17,7 @@ const test = base.extend({
         body: body ? JSON.parse(body) : null,
       });
       res.setHeader('Content-Type', 'application/json');
-      if (req.headers.authorization !== 'Bearer local-test-key') {
+      if (req.headers.authorization !== 'Bearer test-gateway-key-not-for-production-123456') {
         res.writeHead(401);
         res.end(JSON.stringify({ error: { code: 'invalid_api_key' } }));
         return;
@@ -48,9 +50,42 @@ const test = base.extend({
     server.listen(0, '127.0.0.1');
     await once(server, 'listening');
     state.url = `http://127.0.0.1:${server.address().port}/v1`;
+    const api = express();
+    api.use(
+      '/api/ai',
+      createAiRouter({
+        config: {
+          baseUrl: state.url,
+          apiKey: 'test-gateway-key-not-for-production-123456',
+          model: 'gpt-6-luna',
+          password: 'test-demo-access-not-for-production-123456',
+          allowLocalHttp: true,
+          remoteEnabled: false,
+          keyRotated: false,
+          trustLocalProxy: false,
+          publicOrigin: '',
+        },
+        log: () => {},
+      }),
+    );
+    const relay = api.listen(0, '127.0.0.1');
+    await once(relay, 'listening');
+    await page.route('**/api/ai/**', async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      try {
+        const response = await route.fetch({
+          url: `http://127.0.0.1:${relay.address().port}${path}`,
+        });
+        await route.fulfill({ response });
+      } catch {
+        await route.abort().catch(() => {});
+      }
+    });
     try {
       await use(state);
     } finally {
+      relay.closeAllConnections();
+      await new Promise((resolve) => relay.close(resolve));
       server.closeAllConnections();
       await new Promise((resolve) => server.close(resolve));
     }
@@ -67,9 +102,15 @@ async function openAi(page, buffer = pdfFixture()) {
   await page.getByRole('button', { name: 'このPDFに質問', exact: true }).click();
   await expect(page.getByLabel('AIの対象資料')).toHaveValue(/.+/);
 }
-async function configure(page, gateway) {
-  await page.getByLabel('Gateway URL', { exact: true }).fill(gateway.url);
-  await page.getByLabel('ローカルAPIキー', { exact: true }).fill('local-test-key');
+async function configure(page) {
+  await expect(page.getByLabel('Gateway URL', { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('ローカルAPIキー', { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('使用モデル', { exact: true })).toHaveCount(0);
+  await page
+    .getByLabel('デモのアクセスコード', { exact: true })
+    .fill('test-demo-access-not-for-production-123456');
+  await page.getByRole('button', { name: 'ログイン', exact: true }).click();
+  await expect(page.getByText('接続済み', { exact: true })).toBeVisible();
 }
 async function prepare(page) {
   await page.getByRole('button', { name: '本文を抽出', exact: true }).click();
@@ -95,12 +136,6 @@ test('PDF -> real Express relay -> mock Gateway -> answer, per-document persiste
   const id = await page.getByLabel('AIの対象資料').inputValue();
   const originalPdf = await pdfSnapshot(page, id);
   await configure(page, gateway);
-  await expect(page.getByLabel('使用モデル', { exact: true })).toHaveValue('gpt-6-luna');
-  await page.getByRole('button', { name: 'モデル一覧を取得', exact: true }).click();
-  await expect(page.getByLabel('利用可能モデル一覧')).toContainText('gpt-6-astra');
-  await expect(page.getByLabel('使用モデル', { exact: true })).toHaveValue('gpt-6-luna');
-  await page.getByRole('button', { name: '接続テスト', exact: true }).click();
-  await expect(page.getByRole('status')).toContainText('指定モデル');
   await prepare(page);
   await page.getByRole('button', { name: '送信', exact: true }).click();
   await expect(page.locator('.ai-transcript .message.ai')).toContainText('1ページ');
@@ -116,13 +151,13 @@ test('PDF -> real Express relay -> mock Gateway -> answer, per-document persiste
   expect(await pdfSnapshot(page, id)).toEqual(originalPdf);
   expect(saved.entry[0].documentId).toBe(id);
   expect(saved.entry[0].model).toBe('gpt-6-luna');
-  expect(JSON.stringify(saved)).not.toContain('local-test-key');
+  expect(JSON.stringify(saved)).not.toContain('test-gateway-key-not-for-production-123456');
   await page.reload();
   await page.getByRole('button', { name: 'AIアシスタント', exact: false }).first().click();
   await page.getByLabel('AIの対象資料').selectOption(id);
   await expect(page.locator('.ai-transcript .message.ai')).toContainText('1ページ');
-  await expect(page.getByLabel('ローカルAPIキー', { exact: true })).toHaveValue('');
-  await expect(page.getByLabel('Gateway URL', { exact: true })).toHaveValue(gateway.url);
+  await expect(page.getByLabel('デモのアクセスコード', { exact: true })).toHaveValue('');
+  await expect(page.getByLabel('Gateway URL', { exact: true })).toHaveCount(0);
   // Copies have independent histories; deleting a PDF deletes its history, not unrelated PDFs.
   const state = await page.evaluate(async (id) => {
     const { libraryRepository: r } = await import('/library-repository.js');
@@ -175,22 +210,49 @@ test('quota stops without a second request, cancellation keeps the question and 
 });
 test('image-only PDF refuses text submission with a page-specific OCR message', async ({
   page,
+  gateway,
 }) => {
   const pdf = await PDFDocument.create();
   pdf.addPage();
   await openAi(page, Buffer.from(await pdf.save()));
+  await configure(page, gateway);
   await page.getByRole('button', { name: '本文を抽出', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('1ページ');
   await expect(page.getByRole('alert')).toContainText('OCR');
   await expect(page.getByRole('button', { name: '送信', exact: true })).toBeDisabled();
 });
-test('native mobile builds disable AI connection and inference', async ({ page }) => {
+test('native mobile builds without configured HTTPS backend disable AI safely', async ({
+  page,
+}) => {
   await page.addInitScript(() => {
     window.CapacitorCustomPlatform = { name: 'ios' };
   });
   await page.goto('http://localhost:5173');
   await page.getByRole('button', { name: 'AIアシスタント', exact: false }).first().click();
-  await expect(page.getByRole('alert')).toContainText('PC上のlocalhost');
-  await expect(page.getByRole('button', { name: '接続テスト', exact: true })).toBeDisabled();
+  await expect(page.getByRole('alert')).toContainText('AIは現在利用できません');
+  await expect(page.getByLabel('デモのアクセスコード', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '送信', exact: true })).toBeDisabled();
+});
+
+test('Vite refuses private backend files through normal, raw and filesystem paths', async ({
+  request,
+}) => {
+  const { mkdir, writeFile, rm } = await import('node:fs/promises');
+  const { fileURLToPath } = await import('node:url');
+  const directory = new URL('../.private/', import.meta.url),
+    file = new URL('http-deny-fixture.txt', directory);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  await writeFile(file, 'non-secret deny-list test fixture', { mode: 0o600 });
+  try {
+    for (const path of [
+      '/.private/http-deny-fixture.txt',
+      '/.private/http-deny-fixture.txt?raw',
+      '/@fs' + fileURLToPath(file),
+    ]) {
+      const response = await request.get('http://localhost:5173' + path);
+      expect(response.status()).toBe(403);
+    }
+  } finally {
+    await rm(file, { force: true });
+  }
 });

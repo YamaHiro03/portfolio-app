@@ -1,63 +1,145 @@
-# PDF AIアシスタント（CLIProxyAPI）
+# Folio AI連携 v1.1（単一ユーザーのデモ）
 
-## 対応範囲と起動
+## 利用者の操作
 
-PCのlocalhost版（Windows＋WSL2優先）で、1つのPDFの指定ページについて質問する機能です。既存のAI画面を実接続へ置き換えています。複数資料検索、OCR、問題生成専用機能、採点、PDF自動編集は対象外です。Android / iOS・LAN・公開ホストではAI接続を無効化しています。
+PDFを開いて「このPDFに質問」を選び、デモのアクセスコードでログインします。対象ページを指定して本文を抽出し、本文・質問・送信する履歴を確認して送信します。通常画面にはGateway URL、ポート、APIキー、モデル選択は表示しません。
 
-1. 自分の認証環境でCLIProxyAPIを起動します。初期接続先は `http://127.0.0.1:8317/v1` です。
-2. `npm ci` → `npm run dev` でFolioを起動し、PCブラウザで `http://localhost:5173` を開きます。ビルド版は `npm run build` → `npm start` → `http://localhost:3001` でも使えます。
-3. PDFを追加して開き、「このPDFに質問」を押します。
-4. 既存AI画面の設定でGateway URL・CLIProxyAPIのローカルAPIキー・モデルIDを入力します。OpenAIの従量課金APIキーは要求しません。初期モデルは `gpt-6-luna`、必要時は利用者が `gpt-6-astra` 等へ明示的に変更します。Gatewayが公開するモデルIDが利用可能かは一覧と実応答で確認してください。
-5. 「接続テスト」は認証付きモデル一覧と選択モデルの掲載を確認します。推論は実行しません。「モデル一覧を取得」も現在のモデルを自動変更しません。
-6. 開始・終了ページを指定し「本文を抽出」。表示された本文・質問・履歴・モデルを確認してチェックを入れ、「送信」を押します。
+標準モデルは **GPT-6 Luna** です。モデル設定はバックエンドの開発者設定だけに残し、利用者による変更・自動変更・有料APIへのフォールバックは行いません。初期値をLunaにしていますが、利用枠消費量や節約率は未検証で、残量も推測表示しません。Gateway経由のCodex認証利用について、利用枠への計上や許諾・契約上の扱いは別途確認が必要です。
 
-WSL2内のFolioサーバーにとって `127.0.0.1` がWindows側Gatewayに到達できるかは、ネットワーク設定・Gatewayの起動場所に依存します。同じWSL2環境でGatewayを動かすなど、ループバックで到達可能な構成を使ってください。今回の実装は非ループバックIPを許可しません。CORS無効化・APIキーのVite環境変数への埋め込み・外部公開は不要です。
+## 構成
 
-## 接続と認証情報
-
-経路は `React → ローカルExpress /api/ai → CLIProxyAPI → LLM` です。GatewayのURLはHTTP/HTTPSのループバックに限定し、外部APIへの自動フォールバックはありません。HTTPリダイレクトにも追従しません。
-
-URLとモデルのみlocalStorageに保存します。APIキーはブラウザのメモリに保持し、必要なリクエストのJSON本文でローカルExpressに渡し、ExpressがBearerヘッダーに設定します。キーをソース、Vite環境変数、IndexedDB、会話履歴、サーバーログへ保存しません。ページ再読み込み後は再入力します。キー入力はマスク表示ですが、ブラウザの開発者ツールや同一オリジンのスクリプトから完全に隠せるものではありません。質問本文へキーやトークンを貼り付けないでください。
-
-AI中継はリモートアドレス・Host・Origin・専用リクエストヘッダー・JSON形式を確認し、ローカル利用に限定しています。Viteのプロキシ入口でも外部アドレスからのAI要求を拒否します。Gatewayの認証は必須です。汎用の公開AI中継として運用する構成ではありません。他のローカルプロセスや同一オリジン侵害から秘密を隔離するセキュリティ境界ではありません。
-
-## 送信範囲と保存
-
-- PDFの任意の連続範囲を最大5ページ、抽出本文を最大12,000文字に制限します。超過時は切り捨てずエラーにしてページ削減を求めます。
-- 会話履歴は既定では送信しません。利用者が直近1〜5往復を選んだ場合に、その質問・回答だけを再送信します。本文・履歴・質問・システム指示の合計は24,000文字まで、質問は3,000文字までです。これは文字数によるアプリ上の制限で、モデル固有のトークン上限を推測するものではありません。
-- テキスト抽出できないページはページ番号とOCR未対応を表示し、送信を止めます。手書き・テキストメモ・画像の認識は行いません。本文埋め込み済みの手書きも画像なので対象外です。
-- 保存先は既存IndexedDB `folio-pdf`（schema v4）の `aiConversations`。資料ID、モデル、Gatewayの応答モデル（あれば）、時刻、質問、回答、送信した本文と範囲、資料revisionを記録します。過去の本文も個人データとして端末に残ります。
-- PDF削除・フォルダ配下削除では会話も削除します。削除後に遅い応答が届いても履歴を再作成しません。複製したPDFや編集済みコピーは会話を引き継がず独立します。名前変更・移動は資料IDを維持するため会話も維持します。
-- PDFの上書き後も過去の会話は記録として残ります。回答に送った本文を履歴から確認できます。現在の質問には改めて本文を抽出してください。
-- 元PDF・注釈・編集下書きはAIによって変更しません。質問後の回答が保存できなかった場合は画面で保持し「履歴保存のみ再試行」で保存できます。推論の再送信はしません。
-
-## 停止・エラー
-
-通信は非ストリーミングです。生成中の状態を表示し、Gateway待機は60秒、ブラウザ側は65秒でタイムアウトします。停止や画面離脱でHTTP要求を中断しますが、Gatewayで開始済みの推論・利用枠消費を取り消せる保証はありません。
-
-未起動／認証不一致／モデル非対応／利用上限／コンテキスト上限／タイムアウト／PDF解析失敗／不正な応答を区別して表示します。利用上限・結果不明時を含め、自動再試行はありません。再送信やモデル変更は利用者の操作だけで行います。利用枠残量は取得・推測表示しません。
-
-Lunaを初期値としていますが、モデル別消費量や節約率は未検証です。Codexサブスクリプション認証をGateway経由で使う場合の利用枠への計上、許諾・契約上の扱いは別途確認が必要です。アプリはGateway側の経路・アカウントの課金設定・請求額を制御・保証しません。クレジット購入や課金設定変更の機能もありません。
-
-## 検証
-
-`npm test` に接続設定、モデル取得、PDF抽出ロジック、メッセージ、エラー、タイムアウト・キャンセルのテストを追加しています。`tests/ai.spec.js` は実際のExpress中継と模擬GatewayでPDF抽出・会話保存再読込・削除・キャンセルを検証します。
-
-```sh
-npm run dev
-# 別ターミナルで
-npx playwright test tests/ai.spec.js --workers=1
+```text
+Folio（iPhone / PC）
+  → HTTPS + Folioの短期セッション
+  → 既存Expressバックエンド
+  → ループバックのCLIProxyAPI
+  → GPT-6 Luna
 ```
 
-2026-10-15：この実行環境から `127.0.0.1:8317` の接続は失敗しました（HTTP応答なし）。ユーザーの認証環境でLunaの実応答を得るテストは未確認です。モックでの成功を実接続成功とは扱いません。実接続ではモデル一覧、Lunaの回答、PDF本文と整合する回答、再読み込み後の保存を確認してください。
+Gatewayキーはバックエンドだけが保持します。Folioのログインには別のデモ用アクセスコードを使い、ログイン成功後はランダムな短期Bearerセッションを利用します。これはGatewayキーではありません。セッションは端末のメモリだけに保持し、画面移動中は維持しますが、アプリ再起動・ページ再読み込み後は再ログインします。第三者Cookieに依存しないため、CapacitorのWebViewでも同じ方式を使えます。
 
-互換HTTPの参照：[OpenAI Chat Completions](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)。この形式への対応と、Gatewayでのモデル提供・契約上の許諾・料金は別の確認事項です。
+iPhoneのlocalhostはWindows／WSL2を指しません。ネイティブ版では開発者がビルド時にHTTPSのFolioバックエンドURLを指定します。未設定・HTTP・localhost指定の配布アプリではAIを安全に無効化します。Web版の製品ビルドもHTTPSを要求し、開発サーバーでのPCローカルHTTPだけを明示的な例外にしています。
 
-### 自動検証結果（2026-10-15）
+## バックエンド設定（開発者向け）
 
-- `npm test`：21ケース成功、失敗・skipなし。
-- `npm run build`：成功。既存の大きなチャンクに関する警告あり。
-- `npm run format:check`：成功。
-- Playwright：全33ケースが再実行分を含めて成功。全体実行は32成功・1タイムアウトで、コード更新によるVite再読込に遭遇したフォルダ操作を固定後に再実行して成功。AIのPDF不変性チェックも含む2ケースの追加実行が成功。
-- 実CLIProxyAPI接続：未確認（8317番ポート応答なし）。
-- Android / iOSのネイティブビルド・実機操作：今回の変更後は未実行。
+Node.js 24を推奨します。OSの非公開環境変数、または **`.private/ai.env`** を使用します。後者はExpressが読み込み、Viteのenvファイルとして扱いません。既存のプロセス環境変数を優先します。
+
+```sh
+mkdir -p .private
+chmod 700 .private
+cp server/ai.env.example .private/ai.env
+chmod 600 .private/ai.env
+```
+
+| 設定                         | 用途                                                           |
+| ---------------------------- | -------------------------------------------------------------- |
+| `FOLIO_AI_GATEWAY_URL`       | バックエンドから見たGateway。初期値 `http://127.0.0.1:8317/v1` |
+| `FOLIO_AI_GATEWAY_KEY`       | GatewayローカルAPIキー。非公開・必須                           |
+| `FOLIO_AI_MODEL`             | 標準は `gpt-6-luna`。通常は変更しない                          |
+| `FOLIO_AI_DEMO_PASSWORD`     | Gatewayキーとは別の24文字以上のランダムなアクセスコード        |
+| `FOLIO_AI_ALLOW_LOCAL_HTTP`  | 開発時のループバックHTTPだけを許可。productionでは無効         |
+| `FOLIO_AI_REMOTE_ENABLED`    | 外部端末用HTTPS接続の明示的な有効化。初期値false               |
+| `FOLIO_AI_KEY_ROTATED`       | 公開済みテストキーの更新と旧キー拒否を確認した場合のみtrue     |
+| `FOLIO_AI_PUBLIC_ORIGIN`     | HTTPSの公開先origin。パスや末尾スラッシュを含めない            |
+| `FOLIO_AI_TRUST_LOCAL_PROXY` | Tailscale Serveなど同一ホストのHTTPS終端を信頼する場合のみtrue |
+
+`.private/`はGit・Dockerビルド・提出ソースZIPから除外します。Viteの開発サーバーでも`server.fs.deny`でフォルダ全体を拒否し、通常URL・raw・ファイル参照経路から設定ファイルを取得できないようにしています。配信拒否の確認後、デモ用のGatewayキーとアクセスコードを再更新しています。APIキーやアクセスコードをViteの`VITE_*`変数、配布アプリ、ソース、GitHub Secretsを含むフロントビルド設定へ移さないでください。GatewayキーはAPIレスポンスにも返しません。
+
+今回の作業環境には`.private/ai.env`と`.private/gateway-local-test.yaml`を準備しました。後者は既存Gateway設定から認証情報の参照先を引き継いだ非公開コピーです。ループバック専用にし、Gatewayの再試行・上限時のプロジェクト切り替え・モデル切り替え・追加クレジット利用を無効化し、試す認証候補も1件に制限しました。Gatewayのバージョンや認証単位の上書き設定は別途確認が必要です。キーを更新して旧キー401／新キー200を確認済みです。**元の`~/CLIProxyAPI/config.yaml`は変更していないため、元設定で起動し直すとこの更新は反映されません。デモでは更新済みコピーを使用してください。** `.private`一式はこの作業環境だけに存在し、Gitからの新規取得では各開発者が準備します。
+
+この作業環境での起動例：
+
+```sh
+~/CLIProxyAPI/cli-proxy-api -config "$PWD/.private/gateway-local-test.yaml"
+# 別ターミナル
+npm ci
+npm run dev
+```
+
+PCで `http://localhost:5173` を開きます。一般ユーザーがGateway設定を入力する必要はありません。PDFの閲覧・編集にはAI設定自体が不要です。
+
+## iPhoneからの接続準備
+
+1. WindowsとiPhoneを利用者自身のTailnetに接続し、ACL／Grantsで利用者・端末を限定します。
+2. Gatewayはループバックだけで待ち受けます。**8317番ポートを直接公開しません。** 既存の公開済みキーを更新し、旧キーの拒否とバックエンドの新キーを確認します。
+3. Folioをビルドし、Expressを127.0.0.1:3001で起動します。ServeをWindows側で動かす場合は、WindowsからWSL2の3001番へ到達することを先に確認します。転送元がループバックとして扱われない構成ではWSL2内でServeを実行してください。すべてのIPからの転送ヘッダーを信頼する設定には変更しません。
+4. Tailscale Serveで **Folioの3001番だけ** をHTTPSで提供します。Funnelは使いません。
+
+```sh
+npm run build
+NODE_ENV=production npm start
+# Serveを動かすホストからFolioの3001へ到達できることを確認して実行
+# Windowsでは環境変数設定にPowerShell等の対応構文を使います。
+tailscale serve --bg http://127.0.0.1:3001
+```
+
+5. Serveが表示したHTTPS originを`FOLIO_AI_PUBLIC_ORIGIN`に設定します。`FOLIO_AI_TRUST_LOCAL_PROXY=true`、`FOLIO_AI_KEY_ROTATED=true`を確認したうえで`FOLIO_AI_REMOTE_ENABLED=true`にしてExpressを再起動します。URL・HTTPS・更新確認・十分な長さの認証情報が揃わなければ、外部接続は失敗する設計です。
+6. まずiPhone SafariでHTTPSのFolioを開き、アクセスコードでログインします。続いてネイティブ版を使う場合は、GitHubのRepository Variablesに **`VITE_FOLIO_BACKEND_URL=https://<Serveのホスト名>`** だけを登録してビルドします。このURLは秘密情報ではありません。通常画面に設定欄はありません。HTTPやlocalhostのURLは受け付けません。
+7. iPhoneからPDF本文を送信して回答と履歴保存を確認します。単なる接続表示の成功と、実際のLuna回答を区別してください。
+
+Serveからの`X-Forwarded-Proto: https`とHostまたは`X-Forwarded-Host`は、設定で許可した**ループバック上のプロキシから来た場合だけ**信頼します。全プロキシを無条件に信頼する設定にはしていません。Tailscaleの利用者ヘッダーをアプリの認証代わりには使いません。
+
+外部アクセスにはHTTPS・許可origin・Folioセッションが必要です。Capacitorの`capacitor://localhost`／`https://localhost`を許可する場合も、通信先は設定した別端末のHTTPSサーバーです。CORSに認証を任せず、全AI操作でセッションを検証します。
+
+## アクセス制限と診断
+
+- ログイン失敗は全体で5回／15分まで。再送信は手動のみです。
+- セッションは1時間、最大32件、バックエンド再起動で失効します。
+- AI操作はセッションあたり10回／分、同時処理は全体で2件までです。これはFolio側の制限で、Codex利用枠の推測値ではありません。
+- 許可しないorigin、平文の外部通信、未更新キー、セッションなし、クライアントからのGateway設定上書きを拒否します。
+
+バックエンドは`folio_ai`というJSONログを標準出力へ出します。記録はrequestId、操作、HTTP状態、分類コード、アクセス判定理由、所要時間だけです。PDF本文・質問・回答・キー・アクセスコード・セッショントークン・生の通信例外は記録しません。
+
+| 状態                                                   | 確認先                                               |
+| ------------------------------------------------------ | ---------------------------------------------------- |
+| サーバーログが出ない                                   | iPhoneのTailnet接続、DNS、Serveの転送先、TLS証明書   |
+| `remote_disabled` / `rotation_required`                | 外部接続フラグ・キー更新確認                         |
+| `https_required` / `host_denied` / `proxy_not_trusted` | HTTPS終端、転送ヘッダー、公開origin                  |
+| `origin_denied`                                        | Safariのorigin、Capacitorのorigin、接続先の不一致    |
+| `session` / `login_limit`                              | デモ認証、セッション期限、ログイン試行制限           |
+| `authentication`                                       | バックエンドのGatewayキーとGatewayの認証設定         |
+| `unavailable` / `timeout`                              | バックエンドからGatewayへの到達性、Gatewayの状態     |
+| `limit` / `request_limit`                              | Gatewayの上限またはFolioの送信制限。自動再試行しない |
+
+クライアント側の失敗ログは`Folio AI`、分類コード、サーバーから取得できたrequestIdだけです。iPhoneのSafari Web Inspector等で確認し、同じrequestIdのサーバーログと照合します。CORS／TLS等で応答自体が読めなければrequestIdはnullです。
+
+## 資料と会話の保存
+
+PDF本体・注釈・編集下書きは端末内のIndexedDBを維持します。AI送信時だけ、指定したPDF本文・質問・利用者が選んだ会話履歴を一時的にバックエンドへ送信します。Expressは資料本文をファイル・DB・ログへ永続保存しません。Gateway側の記録方針は別途管理してください。資料の自動同期は行いません。
+
+本文は連続最大5ページ・12,000文字、質問は3,000文字、履歴と指示を含む全体は24,000文字までです。超過時は切り捨てず停止します。画像だけのページはOCR未対応として停止します。手書き・画像・テキストメモの解析は行いません。
+
+会話は端末内の`folio-pdf` / `aiConversations`へ、資料ID・モデル・質問・回答・参照本文・範囲・時刻とともに保存します。PDF削除では会話も削除し、複製先は会話を引き継ぎません。設定・認証情報・短期セッションは会話に保存しません。AIによる元PDF・注釈の変更は行いません。
+
+利用上限・通信結果不明・タイムアウト・キャンセルでも自動再試行しません。Gatewayで開始済みの推論や利用枠消費の取り消し、アカウントの課金設定・請求額はアプリでは保証できません。課金設定変更・クレジット購入機能はありません。
+
+## 検証状況（2026-10-15）
+
+| 環境                                     | 結果                                                                     |
+| ---------------------------------------- | ------------------------------------------------------------------------ |
+| WSL2 → CLIProxyAPI                       | 実キーでモデル一覧取得とLunaの実回答を確認                               |
+| WSL2のFolio認証 → バックエンド → Gateway | サンプルPDF本文の科目コードを含むLuna回答を確認                          |
+| Windows上のブラウザ → Folio              | 実Windowsブラウザでは未検証。LinuxのPlaywrightで代替検証                 |
+| iPhone → 認証付きHTTPSバックエンド       | 実機・Tailnet経由は未検証。HTTPSプロキシ／Origin／認証の自動テストで代替 |
+| iPhoneのPDF → Luna回答                   | 実機では未検証                                                           |
+| 更新済みデモGatewayキー                  | 旧キー401、新キー200を確認。元のGateway設定は未変更                      |
+
+この環境ではTailscaleコマンドが利用できないため、Tailnetの接続やServe設定は実施していません。外部接続フラグはfalseのままです。自動テストの結果をiPhone実機での成功と扱いません。
+
+公式資料：[Tailscale Serve](https://tailscale.com/docs/features/tailscale-serve)、[Serve CLI](https://tailscale.com/docs/reference/tailscale-cli/serve)。
+
+### 自動検証
+
+`npm test`は実際の秘密設定を読み込まず、ローカルの模擬Gatewayで認証・HTTPS条件・制限・エラーを検証します。ブラウザテストも専用の模擬GatewayとExpress中継を起動し、実アカウントへ推論を送りません。
+
+```sh
+npm test
+npm run build
+npm run format:check
+# npm run devを起動した別ターミナルで
+npx playwright test --workers=1
+```
+
+通常WebビルドとHTTPSバックエンド指定の配布用Webビルドについて、実Gatewayキー・デモのアクセスコード・ローカルGateway URLが含まれないことも確認しています。Android / iOSのネイティブコンパイル・署名・実機操作は今回未実施です。
+
+自動検証の最終結果：単体24ケース成功、ブラウザ34ケース成功（全体33ケース＋非公開ファイル配信拒否1ケース）。通常Webビルド・HTTPSバックエンド指定のWebバンドル・formatチェックが成功しました。ビルド時には既存の大きなチャンクに関する警告があります。

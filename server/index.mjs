@@ -1,9 +1,11 @@
 import { createAiRouter } from './ai.mjs';
+import { loadPrivateAiEnvironment } from './ai-config.mjs';
 import { officeHealth } from './office-runtime.mjs';
 import express from 'express';
 import multer from 'multer';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { convert } from './convert.mjs';
+loadPrivateAiEnvironment();
 export const app = express();
 app.disable('x-powered-by');
 let active = 0;
@@ -20,6 +22,7 @@ const allowedOrigins = new Set([
     .map((s) => s.trim())
     .filter(Boolean),
 ]);
+app.use('/api/ai', createAiRouter());
 app.use('/api', (req, res, next) => {
   const origin = req.get('origin');
   const sameOrigin = !origin || origin === `${req.protocol}://${req.get('host')}`;
@@ -39,7 +42,6 @@ app.use('/api', (req, res, next) => {
   }
   next();
 });
-app.use('/api/ai', createAiRouter());
 app.get('/api/health', async (_, res) => res.json({ status: 'ok', office: await officeHealth() }));
 app.post(
   '/api/convert',

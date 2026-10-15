@@ -86,3 +86,7 @@ push時と、手動実行で `signed_release` をオフにした時は、iOSシ�
 この変更のローカル確認は構文・パッケージ処理に限定されます。Xcodeでの実ビルドとAltStore経由のインストールはクラウドと実機で確認してください。
 
 参考: [AltStore Classic公式ガイド](https://faq.altstore.io/altstore-classic/your-altstore)、[AltServer](https://faq.altstore.io/altstore-classic/altserver)。
+
+## AIバックエンドのビルド設定
+
+Repository Variablesの `VITE_FOLIO_BACKEND_URL` に、認証付きHTTPSのFolioバックエンドoriginだけを設定します。Gatewayのキー・デモのアクセスコードは登録しません。未設定のネイティブ版ではAI接続を無効化します。詳細は[AI v1.1](AI.md)を参照してください。
